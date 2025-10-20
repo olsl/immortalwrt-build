@@ -21,14 +21,14 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout ImmortalWRT source
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: immortalwrt/immortalwrt
           path: immortalwrt
           fetch-depth: 1
           
       - name: Checkout custom DTB
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           path: custom-files
           fetch-depth: 1
@@ -112,10 +112,11 @@ jobs:
           make -j$(nproc) || make -j1 V=s
           
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: immortalwrt-firmware
           path: |
             immortalwrt/bin/targets/mediatek/mt7981/*.bin
             immortalwrt/bin/targets/mediatek/mt7981/*.img
             immortalwrt/bin/targets/mediatek/mt7981/*.tar.gz
+          retention-days: 30
