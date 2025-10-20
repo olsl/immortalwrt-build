@@ -3,10 +3,6 @@ name: ImmortalWRT Build
 on:
   workflow_dispatch:
     inputs:
-      dtb_file:
-        description: 'DTB file name'
-        required: true
-        default: 'wma301v2.dts'
       target:
         description: 'Target device'
         required: true
@@ -20,17 +16,16 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          
       - name: Checkout ImmortalWRT source
         uses: actions/checkout@v4
         with:
           repository: immortalwrt/immortalwrt
           path: immortalwrt
-          fetch-depth: 1
-          
-      - name: Checkout custom DTB
-        uses: actions/checkout@v4
-        with:
-          path: custom-files
           fetch-depth: 1
           
       - name: Install dependencies
@@ -42,25 +37,45 @@ jobs:
 
       - name: Copy custom DTB
         run: |
-          mkdir -p immortalwrt/target/linux/mediatek/dts/
-          cp custom-files/wma301v2.dts immortalwrt/target/linux/mediatek/dts/
+          echo "Checking out current directory:"
+          ls -la
+          
+          # 确保DTB文件存在
+          if [ -f "wma301v2.dts" ]; then
+            echo "Found wma301v2.dts file"
+            mkdir -p immortalwrt/target/linux/mediatek/dts/
+            cp wma301v2.dts immortalwrt/target/linux/mediatek/dts/
+          else
+            echo "Error: wma301v2.dts not found!"
+            exit 1
+          fi
+          
+          # 显示复制结果
+          echo "Checking copied file:"
+          ls -la immortalwrt/target/linux/mediatek/dts/
           
       - name: Update DTS Makefile
         run: |
           cd immortalwrt/target/linux/mediatek/image
-          echo 'define Device/wma301v2' >> mt7981.mk
-          echo '  $(call Device/factory_image)' >> mt7981.mk
-          echo '  DEVICE_VENDOR := MediaTek' >> mt7981.mk
-          echo '  DEVICE_MODEL := WMA301V2' >> mt7981.mk
-          echo '  DEVICE_DTS := wma301v2' >> mt7981.mk
-          echo '  SUPPORTED_DEVICES += wma301v2' >> mt7981.mk
-          echo 'endef' >> mt7981.mk
-          echo 'TARGET_DEVICES += wma301v2' >> mt7981.mk
+          
+          # 先查看现有的设备定义
+          if grep -q "define Device/wma301v2" mt7981.mk; then
+            echo "Device definition already exists, skipping..."
+          else
+            echo 'define Device/wma301v2' >> mt7981.mk
+            echo '  $(call Device/factory_image)' >> mt7981.mk
+            echo '  DEVICE_VENDOR := MediaTek' >> mt7981.mk
+            echo '  DEVICE_MODEL := WMA301V2' >> mt7981.mk
+            echo '  DEVICE_DTS := wma301v2' >> mt7981.mk
+            echo '  SUPPORTED_DEVICES += wma301v2' >> mt7981.mk
+            echo 'endef' >> mt7981.mk
+            echo 'TARGET_DEVICES += wma301v2' >> mt7981.mk
+          fi
 
       - name: Prepare build environment
         run: |
           cd immortalwrt
-          ./scripts/feeds update -a
+          ./ scripts scripts/feeds update -a
           ./scripts/feeds install -a
           
       - name: Configure build
@@ -82,13 +97,13 @@ jobs:
           CONFIG_PACKAGE_kmod-rt2800-usb=y
           CONFIG_PACKAGE_kmod-rt2x00-usb=y
           CONFIG_PACKAGE_wireless-tools=y
-          CONFIG_PACKAGE_wpa-supplicant=y
+          CONFIG_PACKage_wpa-supplicant=y
           CONFIG_PACKAGE_hostapd=y
           CONFIG_PACKAGE_dnsmasq=y
           CONFIG_PACKAGE_dropbear=y
           CONFIG_PACKAGE_openssh-sftp-server=y
-          CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-ssl=y
+          CONFIG_PACKage_luci=y
+          CONFIG_PACKage_luci-ssl=y
           CONFIG_PACKAGE_luci-app-firewall=y
           CONFIG_PACKAGE_luci-app-opkg=y
           CONFIG_PACKAGE_luci-base=y
@@ -99,7 +114,7 @@ jobs:
           CONFIG_PACKAGE_luci-mod-network=y
           CONFIG_PACKAGE_luci-mod-status=y
           CONFIG_PACKAGE_luci-mod-system=y
-          CONFIG_PACKAGE_luci-proto-ipv6=y
+          CONFIG_PACKage_luci-proto-ipv6=y
           CONFIG_PACKAGE_luci-proto-ppp=y
           CONFIG_PACKAGE_luci-ssl-openssl=y
           CONFIG_PACKAGE_luci-theme-bootstrap=y
@@ -120,3 +135,64 @@ jobs:
             immortalwrt/bin/targets/mediatek/mt7981/*.img
             immortalwrt/bin/targets/mediatek/mt7981/*.tar.gz
           retention-days: 30
+方法二：使用不同的文件结构
+如果您的文件结构不同，可以使用以下简化版本：
+yaml
+name: ImmortalWRT Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          
+      - name: Checkout ImmortalWRT source
+        uses: actions/checkout@v4
+        with:
+          repository: immortalwrt/immortalwrt
+          path: immortalwrt
+          fetch-depth: 1
+          
+      - name: Prepare DTB file
+        run: |
+          # 创建 DTB文件内容
+          cat > immortalwrt/target/linux/mediatek/dts/wma301v2.dts << 'EOF'
+          /dts-v1/;
+
+          / {
+          	compatible = "mediatek,mt7981-spim-snand-rfb";
+          	interrupt-parent = <0x01>;
+          	#address-cells = <0x02>;
+          	#size-cells = <0x02>;
+          	model = "MediaTek MT7981 RFB";
+
+          	cpus {
+          		#address-cells = <0x01>;
+          		#size-cells = <0x00>;
+
+          		cpu@0 {
+          			device_type = "cpu";
+          			compatible = "arm,cortex-a53";
+          			enable-method = "psci";
+          			reg = <0x00>;
+          		};
+
+          		cpu@1 {
+          			device_type = "cpu";
+          			compatible = "arm,cortex-a53";
+          			enable-method = "psci";
+          			reg = <0x01>;
+          		};
+          	};
+
+          	/* 这里省略了大部分DTB内容 */
+          };
+          EOF
+          
+      # 其余步骤保持不变...
