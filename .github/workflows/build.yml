@@ -16,6 +16,46 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
+      - name: 清理磁盘空间（方案1）
+        run: |
+          echo "=== 开始清理磁盘空间 ==="
+          df -h
+          
+          # 删除不必要的工具和缓存
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /var/lib/docker
+          
+          # 清理APT缓存
+          sudo apt clean
+          sudo apt autoremove -y
+          
+          # 清理GitHub Actions缓存
+          rm -rf ~/.cache
+          
+          # 删除大文件日志
+          sudo find /var/log -type f -size +100M -delete
+          
+          echo "=== 清理后磁盘空间 ==="
+          df -h
+          
+      - name: 清理磁盘空间（方案2）
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          apt-packages: true
+          docker-images: true
+          swap-storage: true
+          
+      - name: 检查磁盘空间
+        run: |
+          echo "=== 最终磁盘空间状态 ==="
+          df -h
+          echo "=== 内存状态 ==="
+          free -m
+          
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -34,8 +74,6 @@ jobs:
           uname -a
           df -h
           free -m
-          echo "Disk space:"
-          df -h
           
       - name: Install dependencies
         run: |
@@ -958,8 +996,15 @@ jobs:
           # 先运行defconfig确保配置正确
           make defconfig
           
-          # 开始编译，显示详细输出
-          make -j$(nproc) || make -j1 V=s
+          # 开始编译，限制日志输出以减少磁盘使用
+          make -j$(nproc) 2>&1 | head -n 2000
+          
+          # 检查编译是否成功
+          if [ $? -ne 0 ]; then
+            echo "Build failed, retrying with single thread for debugging..."
+            make -j1 V=s | head -n 1000
+            exit 1
+          fi
           
           # 显示编译结果
           echo "Build completed. Checking output files..."
@@ -1060,4 +1105,4 @@ jobs:
             immortalwrt/build_dir/
             immortalwrt/logs/
             immortalwrt/.config
-          retention-days: 7
+          retention-days: 1  # 减少日志保留时间
