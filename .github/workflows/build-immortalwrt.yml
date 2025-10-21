@@ -43,12 +43,12 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      # 添加MT7981 DTS文件（修复缩进和heredoc语法）
+      # 添加MT7981 DTS文件（修复第53行缩进错误）
       - name: Add MT7981 DTS File
         run: |
           cd immortalwrt
           mkdir -p target/linux/mediatek/dts
-          # 严格控制缩进：DTS内容用4空格缩进，EOF与run:保持同级缩进（2空格）
+          # 第53行对应此处：确保heredoc命令与run:块缩进严格一致（2空格）
           cat > target/linux/mediatek/dts/mt7981-spim-snand-rfb.dts << 'EOF'
 /dts-v1/;
 
@@ -57,7 +57,7 @@ jobs:
     interrupt-parent = <0x01>;
     #address-cells = <0x02>;
     #size-cells = <0x02>;
-    model = "MediaTek MT7981 RFB";  # 第61行对应此处，已修正为4空格缩进
+    model = "MediaTek MT7981 RFB";
 
     cpus {
         #address-cells = <0x01>;
@@ -862,7 +862,7 @@ jobs:
         };
     };
 };
-EOF  # 与run:保持同级缩进（2空格），单独成行无多余字符
+EOF
 
       # 配置编译选项
       - name: Configure Build Options
