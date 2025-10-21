@@ -16,79 +16,52 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: 清理磁盘空间（方案1）
+      - name: 检查初始磁盘空间
+        run: |
+          echo "=== 初始磁盘空间 ==="
+          df -h
+          free -m
+
+      - name: 清理磁盘空间
         run: |
           echo "=== 开始清理磁盘空间 ==="
-          df -h
-          
-          # 删除不必要的工具和缓存
-          sudo rm -rf /opt/hostedtoolcache
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /usr/local/share/powershell
-          sudo rm -rf /var/lib/docker
-          
-          # 清理APT缓存
+          # 删除大型无用目录
+          sudo rm -rf /opt/hostedtoolcache /usr/share/dotnet /usr/local/lib/android /usr/local/share/powershell
+          # 清理系统缓存
           sudo apt clean
-          sudo apt autoremove -y
-          
-          # 清理GitHub Actions缓存
+          sudo apt autoremove -y --purge
+          # 清理用户缓存
           rm -rf ~/.cache
-          
-          # 删除大文件日志
-          sudo find /var/log -type f -size +100M -delete
-          
           echo "=== 清理后磁盘空间 ==="
           df -h
-          
-      - name: 清理磁盘空间（方案2）
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          apt-packages: true
-          docker-images: true
-          swap-storage: true
-          
-      - name: 检查磁盘空间
-        run: |
-          echo "=== 最终磁盘空间状态 ==="
-          df -h
-          echo "=== 内存状态 ==="
-          free -m
-          
-      - name: Checkout repository
+
+      - name: Checkout 主仓库
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          
-      - name: Checkout ImmortalWRT source
+
+      - name: 拉取 ImmortalWRT 源码
         uses: actions/checkout@v4
         with:
           repository: immortalwrt/immortalwrt
           path: immortalwrt
           fetch-depth: 1
-          
-      - name: Show system information
+          retry-count: 3
+          retry-delay: 10000
+
+      - name: 安装完整依赖
         run: |
-          echo "System information:"
-          uname -a
-          df -h
-          free -m
-          
-      - name: Install dependencies
+          echo "=== 安装构建依赖 ==="
+          sudo apt-get update || echo "APT更新警告（非致命）"
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib \
+            gettext git libncurses5-dev libssl-dev python3-distutils \
+            rsync unzip zlib1g-dev file wget curl ninja-build pkg-config
+
+      - name: 创建设备 DTS 文件
         run: |
-          echo "Installing dependencies..."
-          sudo apt-get update
-          sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib \
-            gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev \
-            file wget curl time
-          
-      - name: Create DTB file
-        run: |
-          echo "Creating DTB file..."
+          echo "=== 创建 DTS 文件 ==="
           mkdir -p immortalwrt/target/linux/mediatek/dts/
-          
-          # 创建完整的wma301v2.dts文件
           cat > immortalwrt/target/linux/mediatek/dts/wma301v2.dts << 'EOF'
           /dts-v1/;
 
@@ -821,7 +794,7 @@ jobs:
           	};
 
           	chosen {
-          		bootargs = "console=ttyS0,115200n1 loglevel=8  \t\t\t\tearlycon=uart8250,mmio32,0x11002000";
+          		bootargs = "console=ttyS0,115200n1 loglevel=8 earlycon=uart8250,mmio32,0x11002000";
           	};
 
           	memory {
@@ -905,19 +878,14 @@ jobs:
           	};
           };
           EOF
-          
-          # 显示创建结果
-          echo "DTB file created:"
-          ls -la immortalwrt/target/linux/mediatek/dts/
-          
-      - name: Update DTS Makefile
+          # 验证文件创建
+          ls -la immortalwrt/target/linux/mediatek/dts/wma301v2.dts
+
+      - name: 更新设备 Makefile
         run: |
+          echo "=== 更新 Makefile ==="
           cd immortalwrt/target/linux/mediatek/image
-          
-          # 先查看现有的设备定义
-          if grep -q "define Device/wma301v2" mt7981.mk; then
-            echo "Device definition already exists, skipping..."
-          else
+          if ! grep -q "define Device/wma301v2" mt7981.mk; then
             echo 'define Device/wma301v2' >> mt7981.mk
             echo '  $(call Device/factory_image)' >> mt7981.mk
             echo '  DEVICE_VENDOR := MediaTek' >> mt7981.mk
@@ -927,24 +895,21 @@ jobs:
             echo 'endef' >> mt7981.mk
             echo 'TARGET_DEVICES += wma301v2' >> mt7981.mk
           fi
-          
-          # 显示修改结果
-          echo "Makefile updated:"
-          tail -20 mt7981.mk
+          # 显示最后几行验证
+          tail -10 mt7981.mk
 
-      - name: Prepare build environment
+      - name: 清理并更新 feeds
         run: |
-          echo "Preparing build environment..."
+          echo "=== 处理 feeds ==="
           cd immortalwrt
+          ./scripts/feeds clean
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          
-      - name: Configure build
+
+      - name: 配置构建选项
         run: |
-          echo "Configuring build..."
+          echo "=== 配置构建 ==="
           cd immortalwrt
-          
-          # 创建配置文件
           cat > .config << 'EOF'
           CONFIG_TARGET_mediatek=y
           CONFIG_TARGET_mediatek_mt7981=y
@@ -954,18 +919,17 @@ jobs:
           CONFIG_TOOLCHAINOPTS=y
           CONFIG_GCC_USE_VERSION_11=y
           CONFIG_GCC_VERSION_11=y
-          CONFIG_ALL_KMODS=y
-          CONFIG_ALL=y
+          # 禁用 gn 包避免构建失败
+          CONFIG_PACKAGE_gn=n
+          # 基础功能包
           CONFIG_PACKAGE_kmod-usb3=y
           CONFIG_PACKAGE_kmod-usb2=y
-          CONFIG_PACKAGE_kmod-rt2800-usb=y
-          CONFIG_PACKAGE_kmod-rt2x00-usb=y
           CONFIG_PACKAGE_wireless-tools=y
           CONFIG_PACKAGE_wpa-supplicant=y
           CONFIG_PACKAGE_hostapd=y
           CONFIG_PACKAGE_dnsmasq=y
           CONFIG_PACKAGE_dropbear=y
-          CONFIG_PACKAGE_openssh-sftp-server=y
+          # LuCI 相关
           CONFIG_PACKAGE_luci=y
           CONFIG_PACKAGE_luci-ssl=y
           CONFIG_PACKAGE_luci-app-firewall=y
@@ -983,66 +947,43 @@ jobs:
           CONFIG_PACKAGE_luci-ssl-openssl=y
           CONFIG_PACKAGE_luci-theme-bootstrap=y
           EOF
-          
-          # 显示配置文件
-          echo "Build configuration:"
-          cat .config | grep -E 'TARGET_|DEVICE_|CONFIG_PACKAGE_'
-          
-      - name: Build firmware
+          # 验证配置
+          grep "CONFIG_PACKAGE_gn" .config
+          grep "DEVICE_wma301v2" .config
+
+      - name: 清理构建缓存
         run: |
-          echo "Starting build..."
+          echo "=== 清理构建缓存 ==="
           cd immortalwrt
-          
-          # 先运行defconfig确保配置正确
-          make defconfig
-          
-          # 开始编译，限制日志输出以减少磁盘使用
-          make -j$(nproc) 2>&1 | head -n 2000
-          
-          # 检查编译是否成功
-          if [ $? -ne 0 ]; then
-            echo "Build failed, retrying with single thread for debugging..."
-            make -j1 V=s | head -n 1000
-            exit 1
-          fi
-          
-          # 显示编译结果
-          echo "Build completed. Checking output files..."
-          ls -la bin/targets/mediatek/mt7981/
-          
-          # 检查固件文件是否生成
-          if [ -n "$(ls bin/targets/mediatek/mt7981/*.bin 2>/dev/null)" ]; then
-            echo "Firmware files found:"
-            ls -la bin/targets/mediatek/mt7981/*.bin
-          else
-            echo "Error: No firmware files found!"
-            exit 1
-          fi
-          
-      - name: Create release assets
+          make clean
+
+      - name: 构建固件（详细日志）
         run: |
-          echo "Preparing release assets..."
+          echo "=== 开始构建 ==="
+          cd immortalwrt
+          make defconfig
+          # 单线程构建并输出详细日志
+          make -j1 V=s
+
+      - name: 检查构建结果
+        run: |
+          echo "=== 检查构建产物 ==="
           cd immortalwrt/bin/targets/mediatek/mt7981/
-          
-          # 创建资产目录
-          mkdir -p release_assets
-          
-          # 复制固件文件
-          cp *.bin release_assets/
-          cp *.img release_assets/
-          cp *.tar.gz release_assets/
-          
-          # 显示资产列表
-          echo "Release assets:"
-          ls -la release_assets/
-          
-          # 检查资产是否存在
-          if [ -z "$(ls release_assets/*.bin 2>/dev/null)" ]; then
-            echo "Error: No release assets found!"
+          ls -la *.bin
+          if [ -z "$(ls *.bin 2>/dev/null)" ]; then
+            echo "错误：未生成固件文件！"
             exit 1
           fi
-          
-      - name: Create GitHub Release
+
+      - name: 准备发布资产
+        run: |
+          echo "=== 准备发布资产 ==="
+          cd immortalwrt/bin/targets/mediatek/mt7981/
+          mkdir -p release_assets
+          cp *.bin *.img release_assets/
+          ls -la release_assets/
+
+      - name: 创建 GitHub Release
         id: create_release
         uses: actions/create-release@v1
         env:
@@ -1053,21 +994,21 @@ jobs:
           body: |
             ${{ github.event.inputs.release_notes }}
             
-            ## Build Information
-            - Build date: ${{ github.event.head_commit.timestamp }}
+            ## 构建信息
+            - 构建日期: ${{ github.event.head_commit.timestamp }}
             - Commit: ${{ github.sha }}
-            - Target: mediatek/mt7981/generic
-            - Device: wma301v2
+            - 目标平台: mediatek/mt7981/generic
+            - 设备: wma301v2
             
-            ## Features
-            - Custom DTB support
-            - LuCI web interface
-            - USB support
-            - Wireless support
+            ## 功能
+            - 自定义 DTB 支持
+            - LuCI 网页界面
+            - USB 支持
+            - 无线支持
           draft: false
           prerelease: false
-          
-      - name: Upload Release Assets
+
+      - name: 上传发布资产
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1076,19 +1017,15 @@ jobs:
           asset_path: immortalwrt/bin/targets/mediatek/mt7981/release_assets/
           asset_name: immortalwrt-wma301v2-${{ github.event.inputs.firmware_version }}.zip
           asset_content_type: application/zip
-          
-      - name: Upload individual assets
+
+      - name: 上传单个资产文件
         run: |
-          echo "Uploading individual assets..."
+          echo "=== 上传单个资产 ==="
           cd immortalwrt/bin/targets/mediatek/mt7981/
-          
-          # 获取上传URL
           UPLOAD_URL="${{ steps.create_release.outputs.upload_url }}"
-          
-          # 上传每个固件文件
-          for file in *.bin *.img *.tar.gz; do
+          for file in *.bin *.img; do
             if [ -f "$file" ]; then
-              echo "Uploading $file..."
+              echo "上传 $file..."
               curl -X POST \
                 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
                 -H "Content-Type: application/octet-stream" \
@@ -1096,13 +1033,13 @@ jobs:
                 "${UPLOAD_URL//\{?name,label\}/}?name=$(basename $file)"
             fi
           done
-          
-      - name: Upload build logs
+
+      - name: 上传构建日志（用于排查问题）
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
           path: |
-            immortalwrt/build_dir/
             immortalwrt/logs/
             immortalwrt/.config
-          retention-days: 1  # 减少日志保留时间
+          retention-days: 3
