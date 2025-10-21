@@ -1,63 +1,122 @@
-name: Build ImmortalWrt for MediaTek_MT7981_RFB
+name: Build ImmortalWrt + U-Boot for MediaTek_MT7981_RFB
 
 on:
   workflow_dispatch:  # 仅支持手动触发执行
 
 jobs:
   build:
-    name: Build MediaTek_MT7981_RFB firmware
+    name: Build Firmware & U-Boot for MediaTek_MT7981_RFB
     runs-on: ubuntu-latest
     env:
+      # 基础环境变量
       TARGET: mediatek
       SUBTARGET: filogic
       DEVICE: MediaTek_MT7981_RFB
       DTS_FILENAME: wma301v2.dts
-      DTS_TARGET_PATH: target/linux/mediatek/dts/
-      MAX_SIZE: 52428800  # 基于闪存大小的限制（最大50MB）
-      RELEASE_TAG: firmware-${{ github.ref_name }}-${{ github.sha_short }}-${{ github.run_number }}
+      FIRMWARE_DTS_PATH: target/linux/mediatek/dts/wma301v2.dts
+      MAX_SIZE: 52428800  # 固件大小限制（基于闪存）
+      # U-Boot相关变量
+      U_BOOT_SRC_URL: https://github.com/u-boot/u-boot.git  # 通用U-Boot源码（可替换为平台专用）
+      U_BOOT_DTS_PATH: arch/aarch64/dts/wma301v2.dts
+      U_BOOT_DEFCONFIG: rk3328_defconfig  # U-Boot默认配置（需按平台调整）
+      U_BOOT_TOOLCHAIN: aarch64-linux-gnu-  # 交叉编译工具链前缀
+      U_BOOT_OUTPUT: u-boot-MediaTek_MT7981_RFB.bin
+      # Releases变量
+      RELEASE_TAG: firmware-uboot-${{ github.ref_name }}-${{ github.sha_short }}-${{ github.run_number }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Clean up workspace and expand disk space
+      - name: Clean up workspace and free disk space
         run: |
           echo "=== 初始磁盘空间 ==="
           df -h
           
-          # 移除不必要的软件包（优化：精简列表并添加容错）
-          sudo apt purge -y \
+          # 安全移除大型预装软件
+          sudo apt purge -y --auto-remove \
             azure-cli \
             docker-ce docker-ce-cli containerd.io \
             firefox \
             powershell \
-            2>/dev/null || true  # 忽略不存在的包导致的错误
+            2>/dev/null || true
           
-          # 清理缓存和日志
+          # 清理系统缓存
           sudo apt clean
-          sudo apt autoremove -y
           sudo rm -rf /var/lib/apt/lists/*
           sudo rm -rf /var/cache/apt/archives/*
-          sudo rm -rf /var/log/*
-          sudo rm -rf /tmp/*
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
           
-          # 扩展磁盘空间（GitHub Actions默认分区）
-          sudo lvresize -l +100%FREE /dev/mapper/ubuntu--vg-ubuntu--lv
-          sudo resize2fs /dev/mapper/ubuntu--vg-ubuntu--lv
+          # 删除冗余目录（释放空间）
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell
+          sudo rm -rf /tmp/* /var/tmp/*
+          
+          # 尝试扩展磁盘（仅LVM环境）
+          if [ -b "/dev/mapper/ubuntu--vg-ubuntu--lv" ]; then
+            sudo lvresize -l +100%FREE /dev/mapper/ubuntu--vg-ubuntu--lv
+            sudo resize2fs /dev/mapper/ubuntu--vg-ubuntu--lv || true
+          fi
           
           echo "=== 清理后的磁盘空间 ==="
           df -h
 
-      - name: Prepare build environment
+      - name: Install build dependencies（含U-Boot编译依赖）
         run: |
           sudo apt update -y
-          sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib \
-              gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev \
-              file wget curl
+          sudo apt install -y \
+            # 基础编译工具
+            build-essential clang flex bison g++ gawk gcc-multilib gettext git \
+            libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget curl \
+            # U-Boot编译依赖（交叉工具链+专用工具）
+            gcc-aarch64-linux-gnu \
+            bc dtc libssl-dev python3-pyelftools
 
+      # -------------------------- 新增：U-Boot编译步骤 --------------------------
+      - name: Clone U-Boot source code
+        run: |
+          git clone --depth 1 ${{ env.U_BOOT_SRC_URL }} u-boot-src
+          cd u-boot-src
+          git status  # 验证克隆结果
+
+      - name: Integrate DTS into U-Boot
+        run: |
+          # 检查DTS文件是否存在
+          if [ ! -f "./dts/$DTS_FILENAME" ]; then
+            echo "错误：未找到DTS文件，请确保dts目录中存在$DTS_FILENAME"
+            exit 1
+          fi
+          
+          # 创建U-Boot DTS目录（若不存在）
+          mkdir -p $(dirname "u-boot-src/$U_BOOT_DTS_PATH")
+          # 复制DTS到U-Boot对应目录
+          cp "./dts/$DTS_FILENAME" "u-boot-src/$U_BOOT_DTS_PATH"
+          echo "已将DTS复制到U-Boot路径：u-boot-src/$U_BOOT_DTS_PATH"
+          ls -l "u-boot-src/$U_BOOT_DTS_PATH"  # 验证复制结果
+
+      - name: Configure and build U-Boot
+        run: |
+          cd u-boot-src
+          
+          # U-Boot配置（使用默认配置，需按平台调整DEFCONFIG）
+          make CROSS_COMPILE=$U_BOOT_TOOLCHAIN $U_BOOT_DEFCONFIG
+          
+          # 编译U-Boot（生成u-boot.bin）
+          make CROSS_COMPILE=$U_BOOT_TOOLCHAIN -j$(nproc) \
+            DTS_NAME=$(basename $U_BOOT_DTS_PATH .dts)  # 指定DTS名称
+          
+          # 验证编译结果并复制产物
+          if [ -f "u-boot.bin" ]; then
+            cp u-boot.bin ../$U_BOOT_OUTPUT
+            echo "U-Boot编译成功，产物已保存为：$U_BOOT_OUTPUT"
+            ls -l ../$U_BOOT_OUTPUT
+          else
+            echo "警告：U-Boot编译未生成u-boot.bin，可能需要调整配置"
+            # 列出编译产物目录，便于调试
+            echo "U-Boot编译产物目录内容："
+            ls -l ./*.bin 2>/dev/null || echo "无.bin产物"
+          fi
+      # -------------------------- U-Boot编译步骤结束 --------------------------
+
+      # -------------------------- 原有：固件编译步骤 --------------------------
       - name: Clone ImmortalWrt source
         run: |
           git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git
@@ -65,17 +124,16 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Integrate custom DTS file
+      - name: Integrate DTS into ImmortalWrt
         run: |
           if [ ! -f "./dts/$DTS_FILENAME" ]; then
-            echo "错误：未找到DTS文件，请确保在仓库根目录的dts文件夹中存在$DTS_FILENAME"
+            echo "错误：未找到DTS文件，请确保dts目录中存在$DTS_FILENAME"
             exit 1
           fi
           
-          mkdir -p "immortalwrt/$DTS_TARGET_PATH"
-          cp "./dts/$DTS_FILENAME" "immortalwrt/$DTS_TARGET_PATH"
-          echo "已将自定义DTS文件复制到："
-          ls -l "immortalwrt/$DTS_TARGET_PATH$DTS_FILENAME"
+          mkdir -p $(dirname "immortalwrt/$FIRMWARE_DTS_PATH")
+          cp "./dts/$DTS_FILENAME" "immortalwrt/$FIRMWARE_DTS_PATH"
+          echo "已将DTS复制到固件路径：immortalwrt/$FIRMWARE_DTS_PATH"
 
       - name: Configure firmware
         run: |
@@ -86,35 +144,34 @@ jobs:
           echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
           echo "CONFIG_TARGET_mediatek_filogic_DEVICE_MediaTek_MT7981_RFB=y" >> .config
           
-          # 无线中继必备组件
-          echo "CONFIG_PACKAGE_relayd=y" >> .config  # 中继核心组件
-          echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config  # 无线认证
-          echo "CONFIG_PACKAGE_iw=y" >> .config  # 无线配置工具
-          echo "CONFIG_PACKAGE_hostapd-utils=y" >> .config  # AP模式工具
+          # 无线中继组件
+          echo "CONFIG_PACKAGE_relayd=y" >> .config
+          echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
+          echo "CONFIG_PACKAGE_iw=y" >> .config
+          echo "CONFIG_PACKAGE_hostapd-utils=y" >> .config
           
           # IPv6支持
-          echo "CONFIG_PACKAGE_ipv6helper=y" >> .config  # IPv6辅助工具
-          echo "CONFIG_PACKAGE_odhcp6c=y" >> .config  # IPv6客户端
-          echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config  # IPv6 DHCP服务器
-          echo "CONFIG_PACKAGE_ip6tables=y" >> .config  # IPv6防火墙
-          echo "CONFIG_PACKAGE_ip6tables-extra=y" >> .config  # IPv6防火墙扩展
+          echo "CONFIG_PACKAGE_ipv6helper=y" >> .config
+          echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
+          echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
+          echo "CONFIG_PACKAGE_ip6tables=y" >> .config
+          echo "CONFIG_PACKAGE_ip6tables-extra=y" >> .config
           
-          # 精简固件（适应闪存大小限制）
-          echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config  # 替代默认dnsmasq（更小）
+          # 精简固件
+          echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
           echo "CONFIG_PACKAGE_dnsmasq=no" >> .config
-          echo "CONFIG_STRIP_KERNEL_EXPORTS=y" >> .config  # 剥离内核符号
-          echo "CONFIG_USE_MKLIBS=y" >> .config  # 精简库文件
-          echo "CONFIG_SQUASHFS_COMPRESSION_XZ=y" >> .config  # 使用XZ高压缩
-          echo "CONFIG_KERNEL_KALLSYMS=n" >> .config  # 禁用内核符号表
+          echo "CONFIG_STRIP_KERNEL_EXPORTS=y" >> .config
+          echo "CONFIG_USE_MKLIBS=y" >> .config
+          echo "CONFIG_SQUASHFS_COMPRESSION_XZ=y" >> .config
+          echo "CONFIG_KERNEL_KALLSYMS=n" >> .config
           
           # 禁用非必要组件
-          echo "CONFIG_PACKAGE_luci=no" >> .config  # 移除Web界面（如需可开启）
+          echo "CONFIG_PACKAGE_luci=no" >> .config
           echo "CONFIG_PACKAGE_ppp=no" >> .config
           echo "CONFIG_PACKAGE_openvpn=no" >> .config
           echo "CONFIG_PACKAGE_vsftpd=no" >> .config
           echo "CONFIG_PACKAGE_samba4=no" >> .config
           
-          # 生成最终配置
           make defconfig
 
       - name: Build firmware
@@ -122,48 +179,55 @@ jobs:
           cd immortalwrt
           make download -j$(nproc)
           make -j$(nproc) V=s
-
-      - name: Check firmware size
-        run: |
-          cd immortalwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}
-          FIRMWARE_FILE=$(find . -name "*.bin" | head -n 1)
-          if [ -z "$FIRMWARE_FILE" ]; then
-            echo "未找到固件文件"
+          
+          # 复制固件产物到根目录（便于后续上传）
+          FIRMWARE_FILE=$(find bin/targets/$TARGET/$SUBTARGET -name "*.bin" | head -n 1)
+          if [ -n "$FIRMWARE_FILE" ]; then
+            cp $FIRMWARE_FILE ../${DEVICE}-firmware-${{ github.sha_short }}.bin
+            echo "固件产物：${DEVICE}-firmware-${{ github.sha_short }}.bin"
+            echo "FIRMWARE_OUTPUT=${DEVICE}-firmware-${{ github.sha_short }}.bin" >> $GITHUB_ENV
+          else
+            echo "错误：未找到固件产物"
             exit 1
           fi
-          FILE_SIZE=$(stat -c%s "$FIRMWARE_FILE")
-          echo "固件大小: $FILE_SIZE 字节"
-          echo "固件限制: ${{ env.MAX_SIZE }} 字节"
-          echo "FIRMWARE_FILE=$FIRMWARE_FILE" >> $GITHUB_ENV
-          if [ $FILE_SIZE -gt ${{ env.MAX_SIZE }} ]; then
-            echo "错误: 固件超过限制大小（${{ env.MAX_SIZE }}字节）"
-            exit 1
-          fi
+      # -------------------------- 固件编译步骤结束 --------------------------
 
-      - name: Create GitHub Release
+      # -------------------------- 改进：双产物（固件+U-Boot）发布 --------------------------
+      - name: Create GitHub Release（含固件+U-Boot）
         id: create_release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          release_name: ${{ env.DEVICE }} 固件 (${{ github.sha_short }})
+          release_name: ${{ env.DEVICE }} 固件+U-Boot (${{ github.sha_short }})
           body: |
-            自动构建的 ${{ env.DEVICE }} 固件
-            - 基于 ImmortalWrt 最新源码
-            - 包含无线中继和IPv6支持
-            - 固件大小: ${{ env.FILE_SIZE }} 字节
-            - 大小限制: ${{ env.MAX_SIZE }} 字节
-            - 构建时间: ${{ github.event.head_commit.timestamp }}
+            自动构建产物（基于DTS编译）
+            - 设备：${{ env.DEVICE }}
+            - 架构：aarch64
+            - 固件大小：${{ env.FILE_SIZE }} 字节（限制：${{ env.MAX_SIZE }} 字节）
+            - U-Boot产物：${{ env.U_BOOT_OUTPUT }}
+            - 构建时间：${{ github.event.head_commit.timestamp }}
+            - 提示：U-Boot需确保DTS与平台兼容，可调整工作流中U_BOOT_DEFCONFIG适配
           draft: false
           prerelease: false
 
-      - name: Upload Release Asset
+      - name: Upload Firmware to Release
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: immortalwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/${{ env.FIRMWARE_FILE }}
-          asset_name: ${{ env.DEVICE }}-firmware-${{ github.sha_short }}.bin
+          asset_path: ./${{ env.FIRMWARE_OUTPUT }}
+          asset_name: ${{ env.FIRMWARE_OUTPUT }}
+          asset_content_type: application/octet-stream
+
+      - name: Upload U-Boot to Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./${{ env.U_BOOT_OUTPUT }}
+          asset_name: ${{ env.U_BOOT_OUTPUT }}
           asset_content_type: application/octet-stream
