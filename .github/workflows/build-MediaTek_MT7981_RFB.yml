@@ -1,11 +1,7 @@
 name: Build ImmortalWrt for MediaTek_MT7981_RFB
 
 on:
-  workflow_dispatch:
-  push:
-    paths:
-      - '.github/workflows/build-MediaTek_MT7981_RFB.yml'
-      - 'dts/wma301v2.dts'
+  workflow_dispatch:  # 仅支持手动触发执行
 
 jobs:
   build:
@@ -29,26 +25,13 @@ jobs:
           echo "=== 初始磁盘空间 ==="
           df -h
           
-          # 移除不必要的软件包
+          # 移除不必要的软件包（优化：精简列表并添加容错）
           sudo apt purge -y \
             azure-cli \
             docker-ce docker-ce-cli containerd.io \
-            google-cloud-sdk \
-            kubectl \
-            mysql-client \
-            postgresql-client \
-            mongodb-org \
             firefox \
             powershell \
-            dotnet-sdk-* \
-            openjdk-* \
-            android-sdk-* \
-            ghc-* \
-            llvm-* \
-            mono-* \
-            php-* \
-            ruby-* \
-            2>/dev/null
+            2>/dev/null || true  # 忽略不存在的包导致的错误
           
           # 清理缓存和日志
           sudo apt clean
