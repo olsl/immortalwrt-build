@@ -59,12 +59,12 @@ jobs:
           echo "=== 清理后的磁盘空间 ==="
           df -h
 
-      # -------------------------- 修复：拆分依赖安装，先装基础工具 --------------------------
+      # -------------------------- 修复：替换python3-distutils为python3-setuptools --------------------------
       - name: Install basic build dependencies（基础编译工具）
         run: |
           # 强制更新apt缓存，确保包列表最新
           sudo apt update -y --fix-missing
-          # 优先安装基础编译工具，避免命令过长导致解析失败
+          # 优先安装基础编译工具，移除python3-distutils（Ubuntu 24.04已移除）
           sudo apt install -y \
             build-essential \
             gcc g++ \
@@ -74,7 +74,7 @@ jobs:
             unzip rsync \
             file \
             libncurses5-dev libssl-dev zlib1g-dev \
-            python3-distutils python3-pyelftools
+            python3 python3-setuptools python3-pyelftools  # 用setuptools替代distutils
           # 验证基础工具是否安装成功
           if ! command -v gcc &> /dev/null || ! command -v make &> /dev/null; then
             echo "错误：基础编译工具安装失败"
