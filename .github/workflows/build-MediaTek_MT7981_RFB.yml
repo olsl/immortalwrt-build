@@ -13,36 +13,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: 🧹 第一步：清理磁盘空间
+    - name: 🧹 清理磁盘空间
       run: |
         df -h
-        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+        sudo rm -rf /usr/share/dotnet /opt/ghc
         docker image prune -a -f
-        df -h
 
-    - name: 🔧 第二步：安装编译依赖
+    - name: 🔧 安装编译依赖
       run: |
         sudo apt-get update
         sudo apt-get install -y \
           build-essential \
           libncurses-dev \
           zlib1g-dev \
-          gawk \
-          flex \
-          bison \
-          openssl \
-          libssl-dev \
-          gettext \
-          libelf-dev \
+          gawk flex bison \
+          openssl libssl-dev \
+          gettext libelf-dev \
           device-tree-compiler \
-          rsync \
-          git-core \
-          python3 \
-          unzip \
-          libtool-bin \
-          automake \
-          pkg-config \
-          ccache
+          rsync git-core \
+          python3 unzip \
+          libtool-bin automake pkg-config ccache
 
     - name: 📂 检出源码
       uses: actions/checkout@v4
@@ -56,16 +46,16 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 🎛️ 第三步：配置编译选项
+    - name: 🎛️ 配置编译选项
       run: |
         cd source
         make defconfig
-        cat >> .config << EOF
-CONFIG_PACKAGE_luci=y
-CONFIG_PACKAGE_relayd=y
-CONFIG_PACKAGE_odhcpd_ipv6only=y
-CONFIG_PACKAGE_samba36-server=y
-EOF
+        printf "%s\n" \
+          "CONFIG_PACKAGE_luci=y" \
+          "CONFIG_PACKAGE_relayd=y" \
+          "CONFIG_PACKAGE_odhcpd_ipv6only=y" \
+          "CONFIG_PACKAGE_samba36-server=y" \
+          >> .config
         make defconfig
 
     - name: 🏗️ 编译固件
@@ -82,7 +72,7 @@ EOF
           size=$(stat -c%s "$bin")
           echo "$bin -> $size bytes"
           if [ $size -gt 52428800 ]; then
-            echo "❌ 固件超出大小限制"
+            echo "❌ 固件超出限制"
             exit 1
           fi
         done
