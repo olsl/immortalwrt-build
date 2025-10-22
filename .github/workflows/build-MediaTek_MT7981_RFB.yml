@@ -23,9 +23,26 @@ jobs:
     - name: 🔧 第二步：安装编译依赖
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential libncurses-dev zlib1g-dev \
-          gawk flex bison openssl libssl-dev gettext libelf-dev device-tree-compiler \
-          rsync git-core python3 unzip libtool-bin automake pkg-config ccache
+        sudo apt-get install -y \
+          build-essential \
+          libncurses-dev \
+          zlib1g-dev \
+          gawk \
+          flex \
+          bison \
+          openssl \
+          libssl-dev \
+          gettext \
+          libelf-dev \
+          device-tree-compiler \
+          rsync \
+          git-core \
+          python3 \
+          unzip \
+          libtool-bin \
+          automake \
+          pkg-config \
+          ccache
 
     - name: 📂 检出源码
       uses: actions/checkout@v4
@@ -43,13 +60,10 @@ jobs:
       run: |
         cd source
         make defconfig
-        echo "开始交互式配置..."
-        # 使用 here-doc 模拟 menuconfig（实际需人工干预或使用 config.seed）
-        cat > .config << EOF
-CONFIG_TARGET_AARCH64_CORTEX_A53=y
+        cat >> .config << EOF
 CONFIG_PACKAGE_luci=y
 CONFIG_PACKAGE_relayd=y
-CONFIG_PACKAGE_odhcpd-ipv6only=y
+CONFIG_PACKAGE_odhcpd_ipv6only=y
 CONFIG_PACKAGE_samba36-server=y
 EOF
         make defconfig
@@ -67,7 +81,10 @@ EOF
           [ -f "$bin" ] || continue
           size=$(stat -c%s "$bin")
           echo "$bin -> $size bytes"
-          [ $size -le 52428800 ] || (echo "❌ 超出大小限制!" && exit 1)
+          if [ $size -gt 52428800 ]; then
+            echo "❌ 固件超出大小限制"
+            exit 1
+          fi
         done
 
     - name: 🚀 发布到 Releases
