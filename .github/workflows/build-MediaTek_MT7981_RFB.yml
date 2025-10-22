@@ -1,28 +1,22 @@
-name: Build ImmortalWrt + U-Boot for MediaTek_MT7981_RFB
-
+name: Build MediaTek_MT7981_RFB (Samba版)
 on:
-  workflow_dispatch:  # 仅支持手动触发执行
+  workflow_dispatch:
 
 jobs:
   build:
-    name: Build Firmware & U-Boot for MediaTek_MT7981_RFB
     runs-on: ubuntu-latest
     env:
-      TARGET: mediatek
-      SUBTARGET: filogic
+      TARGET: x86
+      SUBTARGET: 64
       DEVICE: MediaTek_MT7981_RFB
-      DTS_FILENAME: wma301v2.dts
-      FIRMWARE_DTS_PATH: target/linux/mediatek/dts/wma301v2.dts
+      DTS_FILE: wma301v2.dts
       MAX_SIZE: 52428800
-      U_BOOT_SRC_URL: https://github.com/u-boot/u-boot.git
-      U_BOOT_DTS_PATH: arch/aarch64/dts/wma301v2.dts
-      U_BOOT_DEFCONFIG: rk3328_defconfig
-      U_BOOT_TOOLCHAIN: aarch64-linux-gnu-
+      U_BOOT_TOOLCHAIN: 
+      U_BOOT_DEFCONFIG: qemu_x86_defconfig
       U_BOOT_OUTPUT: u-boot-MediaTek_MT7981_RFB.bin
-      RELEASE_TAG: firmware-uboot-${{ github.ref_name }}-${{ github.sha_short }}-${{ github.run_number }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Clean workspace
@@ -30,93 +24,85 @@ jobs:
           sudo apt purge -y azure-cli docker-ce firefox powershell 2>/dev/null || true
           sudo apt clean && sudo rm -rf /var/lib/apt/lists/* /usr/share/dotnet /usr/local/lib/android
 
-      - name: Install basic dependencies
+      - name: Install dependencies
         run: |
           sudo apt update -y --fix-missing
-          sudo apt install -y build-essential gcc g++ make git wget unzip file libncurses5-dev libssl-dev zlib1g-dev python3 python3-setuptools python3-pyelftools
+          sudo apt install -y build-essential gcc g++ make git wget unzip file libncurses5-dev libssl-dev zlib1g-dev python3 python3-setuptools
 
-      - name: Install U-Boot dependencies
+      - name: Install U-Boot tools
         run: |
           sudo apt install -y device-tree-compiler bc flex bison clang gawk gcc-multilib gettext
-          case "${{ env.U_BOOT_TOOLCHAIN }}" in
-            "arm-linux-gnueabihf-") sudo apt install -y gcc-arm-linux-gnueabihf;;
-            "aarch64-linux-gnu-") sudo apt install -y gcc-aarch64-linux-gnu;;
-            "mipsel-linux-gnu-") sudo apt install -y gcc-mipsel-linux-gnu;;
-          esac
+          if [ "" = "arm-linux-gnueabihf-" ]; then
+            sudo apt install -y gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
+          elif [ "" = "aarch64-linux-gnu-" ]; then
+            sudo apt install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+          elif [ "" = "mipsel-linux-gnu-" ]; then
+            sudo apt install -y gcc-mipsel-linux-gnu binutils-mipsel-linux-gnu
+          fi
 
-      # U-Boot编译
-      - name: Clone U-Boot
-        run: git clone --depth 1 ${{ env.U_BOOT_SRC_URL }} u-boot-src
-
-      - name: Copy DTS to U-Boot
-        run: |
-          mkdir -p $(dirname "u-boot-src/$U_BOOT_DTS_PATH")
-          cp "./dts/$DTS_FILENAME" "u-boot-src/$U_BOOT_DTS_PATH"
-
+      # 编译U-Boot（保留）
       - name: Build U-Boot
         run: |
+          git clone --depth 1 https://github.com/u-boot/u-boot.git u-boot-src
           cd u-boot-src
-          make CROSS_COMPILE=$U_BOOT_TOOLCHAIN $U_BOOT_DEFCONFIG
-          make CROSS_COMPILE=$U_BOOT_TOOLCHAIN -j$(nproc) DTS_NAME=$(basename $U_BOOT_DTS_PATH .dts)
-          [ -f "u-boot.bin" ] && cp u-boot.bin ../$U_BOOT_OUTPUT || echo "U-Boot编译警告"
+          make CROSS_COMPILE=${{ env.U_BOOT_TOOLCHAIN }} ${{ env.U_BOOT_DEFCONFIG }}
+          make CROSS_COMPILE=${{ env.U_BOOT_TOOLCHAIN }} -j$(nproc)
+          [ -f "u-boot.bin" ] && cp u-boot.bin ../${{ env.U_BOOT_OUTPUT }}
 
-      # 固件编译（仅Samba）
-      - name: Clone ImmortalWrt
-        run: git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git
-
-      - name: Prepare ImmortalWrt
+      # 编译固件（保留无线中继、IPv6，仅加Samba，无FTP）
+      - name: Build ImmortalWrt
         run: |
+          git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git
           cd immortalwrt
           ./scripts/feeds update -a && ./scripts/feeds install -a
-          mkdir -p $(dirname "$FIRMWARE_DTS_PATH")
-          cp "../dts/$DTS_FILENAME" "$FIRMWARE_DTS_PATH"
+          mkdir -p target/linux/${{ env.TARGET }}/dts
+          cp ../dts/${{ env.DTS_FILE }} target/linux/${{ env.TARGET }}/dts/
 
-      - name: Configure firmware（仅Samba）
-        run: |
-          cd immortalwrt
-          echo "CONFIG_TARGET_mediatek=y" >> .config
-          echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
-          echo "CONFIG_TARGET_mediatek_filogic_DEVICE_MediaTek_MT7981_RFB=y" >> .config
-          # 无线中继
+          # 配置（保留所有需求功能）
+          echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> .config
+          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
+          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}_DEVICE_${{ env.DEVICE }}=y" >> .config
+          
+          # 无线中继（保留）
           echo "CONFIG_PACKAGE_relayd=y" >> .config
           echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
-          # IPv6
+          
+          # IPv6（保留）
           echo "CONFIG_PACKAGE_ipv6helper=y" >> .config
           echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
-          # Samba文件共享
+          echo "CONFIG_PACKAGE_ip6tables=y" >> .config
+          
+          # Samba（保留）
           echo "CONFIG_PACKAGE_samba4=y" >> .config
           echo "CONFIG_PACKAGE_samba4-server=y" >> .config
           echo "CONFIG_PACKAGE_samba4-libs=y" >> .config
           echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
-          # 精简配置
+          
+          # 基础工具（保留）
           echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
           echo "CONFIG_SQUASHFS_COMPRESSION_XZ=y" >> .config
           make defconfig
 
-      - name: Build firmware
-        run: |
-          cd immortalwrt
+          # 编译
           make download -j$(nproc)
           make -j$(nproc) V=s
-          FIRMWARE_FILE=$(find bin/targets/$TARGET/$SUBTARGET -name "*.bin" | head -n 1)
-          [ -n "$FIRMWARE_FILE" ] && cp $FIRMWARE_FILE ../${DEVICE}-firmware-${{ github.sha_short }}.bin || exit 1
-          echo "FIRMWARE_OUTPUT=${DEVICE}-firmware-${{ github.sha_short }}.bin" >> $GITHUB_ENV
+          FIRMWARE_FILE=$(find bin/targets/${TARGET}/${SUBTARGET} -name "*.bin" | head -n 1)
+          [ -n "$FIRMWARE_FILE" ] && cp $FIRMWARE_FILE ../${DEVICE}-firmware.bin || exit 1
+          echo "FIRMWARE_OUTPUT=${DEVICE}-firmware.bin" >> $GITHUB_ENV
 
-      # 发布产物
+      # 发布产物（保留）
       - name: Create Release
         uses: actions/create-release@v1
         env: { GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} }
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          release_name: ${{ env.DEVICE }} 固件+U-Boot (${{ github.sha_short }})
+          tag_name: ${{ env.DEVICE }}-${{ github.sha_short }}
+          release_name: ${{ env.DEVICE }} 固件+U-Boot
           body: |
             功能：Samba文件共享 + 无线中继 + IPv6
-            架构：aarch64
-            固件大小限制：${{ env.MAX_SIZE }} 字节
+            固件大小限制：50.0 MB
 
       - name: Upload Firmware
         uses: actions/upload-release-asset@v1
-        env: { GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} }
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./${{ env.FIRMWARE_OUTPUT }}
@@ -125,7 +111,6 @@ jobs:
 
       - name: Upload U-Boot
         uses: actions/upload-release-asset@v1
-        env: { GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} }
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./${{ env.U_BOOT_OUTPUT }}
