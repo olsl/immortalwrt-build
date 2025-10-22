@@ -16,8 +16,8 @@ jobs:
     - name: 🧹 清理磁盘空间
       run: |
         df -h
-        sudo rm -rf /usr/share/dotnet /opt/ghc
-        docker image prune -a -f
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
+        docker image prune -a -f || true
 
     - name: 🔧 安装编译依赖
       run: |
@@ -41,7 +41,7 @@ jobs:
 
     - name: 📥 克隆 ImmortalWrt 源码
       run: |
-        git clone https://github.com/immortalwrt/immortalwrt source
+        git clone -b openwrt-23.05 --depth 1 https://github.com/immortalwrt/immortalwrt source
         cd source
         ./scripts/feeds update -a
         ./scripts/feeds install -a
@@ -50,7 +50,7 @@ jobs:
       run: |
         cd source
         make defconfig
-        printf "%s\n" \
+        printf "%s\\n" \
           "CONFIG_PACKAGE_luci=y" \
           "CONFIG_PACKAGE_relayd=y" \
           "CONFIG_PACKAGE_odhcpd_ipv6only=y" \
@@ -66,33 +66,31 @@ jobs:
     - name: 🔍 检查固件大小
       run: |
         FIRMWARE_DIR=source/bin/targets/*/*
-        find $FIRMWARE_DIR -name "*.bin" -exec ls -lh {} \;
+        find $FIRMWARE_DIR -type f -name "*.bin" -o -name "*.img*" | xargs ls -lh
         for bin in $FIRMWARE_DIR/*.bin; do
           [ -f "$bin" ] || continue
           size=$(stat -c%s "$bin")
           echo "$bin -> $size bytes"
           if [ $size -gt 52428800 ]; then
-            echo "❌ 固件超出限制"
+            echo "❌ 固件超出预估闪存限制，请精简功能或换大容量设备。"
             exit 1
           fi
         done
 
-    - name: 🚀 发布到 Releases
-      if: success()
-      uses: svenstaro/upload-release-action@v2
+    - name: 📦 保存所有输出为 Artifact
+      uses: actions/upload-artifact@v4
       with:
-        repo_token: ${{ secrets.GITHUB_TOKEN }}
-        file: source/bin/targets/*/*/immortalwrt*.bin
-        asset_name: ${{ github.event.inputs.target_device }}-${{ github.sha }}.bin
-        tag: latest
-        overwrite: true
-        draft: false
-        body: |
-          自动生成的 ImmortalWrt 固件
-          - 设备：MediaTek MT7981 RFB
-          - 架构：aarch64_cortex-a53
-          - 闪存：128MB | 内存：256MB
-          - 无线：2.4G= | 5G=
-          - Switch：
-          - U-Boot：u-boot-mt7981
-          - 功能：🌐LCUI, 🔁中继, 🔢IPv6, 📁Samba
+        name: firmware-${{ github.event.inputs.target_device }}-${{ github.run_number }}
+        path: |
+          source/bin/targets/*/*
+          source/build_dir/target*/logs/*.log
+          source/staging_dir/toolchain*/info.mk
+        retention-days: 90
+        if-no-files-found: error
+
+    - name: 📝 下载指引
+      run: |
+        echo "✅ 编译成功！"
+        echo "📥 固件已作为 Artifact 保存，请前往："
+        echo "🔗 https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        echo "📂 下载名为 'firmware-MediaTek MT7981 RFB-X' 的压缩包获取固件文件。"
