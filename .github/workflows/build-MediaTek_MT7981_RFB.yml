@@ -59,18 +59,50 @@ jobs:
           echo "=== 清理后的磁盘空间 ==="
           df -h
 
-      - name: Install build dependencies（含U-Boot编译依赖）
+      # -------------------------- 修复：拆分依赖安装，先装基础工具 --------------------------
+      - name: Install basic build dependencies（基础编译工具）
         run: |
-          sudo apt update -y
+          # 强制更新apt缓存，确保包列表最新
+          sudo apt update -y --fix-missing
+          # 优先安装基础编译工具，避免命令过长导致解析失败
           sudo apt install -y \
-            # 基础编译工具
-            build-essential clang flex bison g++ gawk gcc-multilib gettext git \
-            libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget curl \
-            # U-Boot编译依赖（交叉工具链+专用工具）
-            gcc-aarch64-linux-gnu \
-            bc dtc libssl-dev python3-pyelftools
+            build-essential \
+            gcc g++ \
+            make \
+            git \
+            wget curl \
+            unzip rsync \
+            file \
+            libncurses5-dev libssl-dev zlib1g-dev \
+            python3-distutils python3-pyelftools
+          # 验证基础工具是否安装成功
+          if ! command -v gcc &> /dev/null || ! command -v make &> /dev/null; then
+            echo "错误：基础编译工具安装失败"
+            exit 1
+          fi
 
-      # -------------------------- 新增：U-Boot编译步骤 --------------------------
+      - name: Install U-Boot specific dependencies（U-Boot专用依赖）
+        run: |
+          # 根据架构安装对应的交叉编译工具链
+          case "${{ env.U_BOOT_TOOLCHAIN }}" in
+            "arm-linux-gnueabihf-")
+              sudo apt install -y gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf;;
+            "aarch64-linux-gnu-")
+              sudo apt install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu;;
+            "mipsel-linux-gnu-")
+              sudo apt install -y gcc-mipsel-linux-gnu binutils-mipsel-linux-gnu;;
+            *)
+              echo "无需额外交叉工具链（X86架构）";;
+          esac
+          # 安装U-Boot编译必需的工具
+          sudo apt install -y \
+            bc \
+            dtc \
+            flex bison \
+            clang gawk gcc-multilib gettext
+      # -------------------------- 依赖安装步骤结束 --------------------------
+
+      # -------------------------- U-Boot编译步骤 --------------------------
       - name: Clone U-Boot source code
         run: |
           git clone --depth 1 ${{ env.U_BOOT_SRC_URL }} u-boot-src
@@ -116,7 +148,7 @@ jobs:
           fi
       # -------------------------- U-Boot编译步骤结束 --------------------------
 
-      # -------------------------- 原有：固件编译步骤 --------------------------
+      # -------------------------- 固件编译步骤 --------------------------
       - name: Clone ImmortalWrt source
         run: |
           git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git
@@ -192,7 +224,7 @@ jobs:
           fi
       # -------------------------- 固件编译步骤结束 --------------------------
 
-      # -------------------------- 改进：双产物（固件+U-Boot）发布 --------------------------
+      # -------------------------- 双产物（固件+U-Boot）发布 --------------------------
       - name: Create GitHub Release（含固件+U-Boot）
         id: create_release
         uses: actions/create-release@v1
