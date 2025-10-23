@@ -10,46 +10,43 @@ jobs:
       DTS_FILE: mt7981b-wma301-ax3000-v2.dts
       PROFILE: WMA301_AX3000
     steps:
-    - name: 🧹 清理空间
+    - name: 🧹 清理空间（可选）
       run: sudo rm -rf /usr/share/dotnet /opt/ghc && docker image prune -af || true
 
-    - name: 🔧 安装依赖
+    - name: 🔍 调试：列出仓库初始文件
       run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential libncurses-dev zlib1g-dev \
-          gawk flex bison openssl libssl-dev gettext libelf-dev \
-          device-tree-compiler rsync git-core python3 unzip \
-          libtool-bin automake pkg-config ccache
-
-    - name: 📂 检查 DTS 文件是否存在
-      run: |
-        echo "🔍 当前目录内容："
+        echo "📁 当前仓库根目录文件："
         find . -type f | sort
-        echo "📁 期望文件：dts/${DTS_FILE}"
-        
+
+    - name: 📂 备份 DTS 文件（防止 git clone 覆盖）
+      run: |
+        echo "📦 正在备份 DTS 文件..."
+        mkdir -p ./temp-dts
         if [ ! -f "dts/${DTS_FILE}" ]; then
           echo "❌ 错误：未找到 dts/${DTS_FILE}"
-          echo "💡 请确认："
-          echo "   1. 文件已放入仓库根目录的 dts/ 文件夹"
-          echo "   2. 文件名完全匹配（包括大小写）"
-          echo "   3. 已执行 git add dts/ && git push"
-          echo "   4. .gitignore 未忽略该文件"
+          echo "💡 解决方法："
+          echo "   1. 确保文件已提交到仓库：git add dts/"
+          echo "   2. 文件名完全匹配（注意大小写）"
+          echo "   3. .gitignore 未忽略 *.dts"
           exit 1
         fi
-        echo "✅ 成功找到 DTS 文件：${DTS_FILE}"
+        cp "dts/${DTS_FILE}" ./temp-dts/
+        echo "✅ 成功备份 ${DTS_FILE} 到临时目录"
 
-    - name: 📥 克隆源码
+    - name: 📥 克隆 ImmortalWrt 源码
       run: |
         git clone -b openwrt-23.05 --depth 1 https://github.com/immortalwrt/immortalwrt source
         cd source
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 📁 复制 DTS
+    - name: 📁 复制 DTS 到目标架构目录
       run: |
         cd source
-        mkdir -p target/linux/${TARGET}/dts
-        cp ../dts/${DTS_FILE} target/linux/${TARGET}/dts/
+        DTS_DIR="target/linux/${TARGET}/dts"
+        mkdir -p "${DTS_DIR}"
+        cp "../temp-dts/${DTS_FILE}" "${DTS_DIR}/"
+        echo "✅ DTS 文件已就位：${DTS_DIR}/${DTS_FILE}"
 
     - name: 🔧 注册新设备
       run: >-
@@ -63,7 +60,7 @@ jobs:
           echo 'define Device/WMA301_AX3000' >> "$MAKEFILE";           echo '  $(Device/filogic)' >> "$MAKEFILE";           echo '  DEVICE_VENDOR := Wma301' >> "$MAKEFILE";           echo '  DEVICE_MODEL := mt7981b-wma301-ax3000' >> "$MAKEFILE";           echo '  DEVICE_DTS := mt7981b-wma301-ax3000-v2' >> "$MAKEFILE";           echo '  DEVICE_PACKAGES := wpad-basic-mbedtls kmod-leds-gpio kmod-input-gpio-buttons kmod-mt7915 kmod-mt7531ae luci relayd odhcpd-ipv6only samba36-server kmod-usb-printer kmod-of-mediatek-pinctrl' >> "$MAKEFILE";           echo '  SUPPORTED_DEVICES += mt7981b-wma301-ax3000-v2' >> "$MAKEFILE";           echo 'endef' >> "$MAKEFILE";           echo 'TARGET_DEVICES += WMA301_AX3000' >> "$MAKEFILE"
         fi
 
-    - name: 🎛️ 生成配置
+    - name: 🎛️ 生成配置文件 .config
       run: |
         cd source
         touch .config
@@ -85,24 +82,26 @@ jobs:
         echo 'CONFIG_PACKAGE_kmod-mt7531ae=y' >> .config
         make defconfig
 
-    - name: 🏗️ 编译固件
+    - name: 🏗️ 开始编译固件
       run: |
         cd source
+        echo "⏳ 正在编译... 使用 $(nproc) 个线程"
         make -j$(nproc) V=s
 
-    - name: 🔍 检查固件大小
+    - name: 🔍 检查生成的固件大小
       run: |
-        for f in source/bin/targets/*/*/openwrt-*-*-squashfs-sysupgrade.bin; do
+        cd source
+        for f in bin/targets/*/*/openwrt-*-*-squashfs-sysupgrade.bin; do
           [ -f "$f" ] || continue
           sz=$(stat -c%s "$f")
           echo "$f -> $sz 字节"
           if [ $sz -gt 134217728 ]; then
-            echo "❌ 固件超出 128MB 限制"
+            echo "❌ 固件超出 128MB 限制 ($sz > 134217728)"
             exit 1
           fi
         done
 
-    - name: 📦 上传固件
+    - name: 📦 上传编译好的固件
       uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ github.run_number }}
