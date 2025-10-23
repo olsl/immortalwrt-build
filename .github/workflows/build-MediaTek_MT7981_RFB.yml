@@ -3,6 +3,7 @@ on: workflow_dispatch
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       TARGET: mediatek
       SUBTARGET: filogic
@@ -10,10 +11,15 @@ jobs:
       PROFILE: WMA301_AX3000
     steps:
     - name: 🧹 清理空间
-      run: sudo rm -rf /usr/share/dotnet /opt/ghc && docker image prune -af
+      run: sudo rm -rf /usr/share/dotnet /opt/ghc && docker image prune -af || true
 
     - name: 🔧 安装依赖
-      run: sudo apt-get update && sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk flex bison openssl libssl-dev gettext libelf-dev device-tree-compiler rsync git-core python3 unzip libtool-bin automake pkg-config ccache
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libncurses-dev zlib1g-dev \
+          gawk flex bison openssl libssl-dev gettext libelf-dev \
+          device-tree-compiler rsync git-core python3 unzip \
+          libtool-bin automake pkg-config ccache
 
     - name: 📂 检查 DTS 文件
       run: |
@@ -24,7 +30,11 @@ jobs:
         fi
 
     - name: 📥 克隆源码
-      run: git clone -b openwrt-23.05 --depth 1 https://github.com/immortalwrt/immortalwrt source && cd source && ./scripts/feeds update -a && ./scripts/feeds install -a
+      run: |
+        git clone -b openwrt-23.05 --depth 1 https://github.com/immortalwrt/immortalwrt source
+        cd source
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
     - name: 📁 复制 DTS
       run: |
@@ -39,10 +49,10 @@ jobs:
         mkdir -p "$DIR"
         if [ ! -f "$MAKEFILE" ]; then
           echo "Creating $MAKEFILE"
-          echo "include $(INCLUDE_DIR)/image.mk" > "$MAKEFILE"
+          echo "include \$(INCLUDE_DIR)/image.mk" > "$MAKEFILE"
         fi
         if ! grep -q "define Device/WMA301_AX3000" "$MAKEFILE"; then
-          cat >> "$MAKEFILE" << EOF
+          cat >> "$MAKEFILE" << 'EOF'
 
 define Device/WMA301_AX3000
   $(Device/filogic)
@@ -59,29 +69,34 @@ EOF
     - name: 🎛️ 生成配置
       run: |
         cd source
-
-        echo "CONFIG_TARGET_mediatek=y" >> .config
-        echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
-        echo "CONFIG_TARGET_mediatek_filogic_DEVICE_WMA301_AX3000=y" >> .config
-        echo "CONFIG_PACKAGE_u-boot-mediatek=y" >> .config
-        echo "CONFIG_PACKAGE_u-boot-mediatek-images=y" >> .config
-        echo "CONFIG_PACKAGE_luci=y" >> .config
-        echo "CONFIG_PACKAGE_relayd=y" >> .config
-        echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
-        echo "CONFIG_PACKAGE_samba36-server=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-printer=y" >> .config
+        touch .config
+        echo 'CONFIG_TARGET_mediatek=y' >> .config
+        echo 'CONFIG_TARGET_mediatek_filogic=y' >> .config
+        echo 'CONFIG_TARGET_mediatek_filogic_DEVICE_WMA301_AX3000=y' >> .config
+        echo 'CONFIG_PACKAGE_u-boot-mediatek=y' >> .config
+        echo 'CONFIG_PACKAGE_u-boot-mediatek-images=y' >> .config
+        echo 'CONFIG_PACKAGE_luci=y' >> .config
+        echo 'CONFIG_PACKAGE_relayd=y' >> .config
+        echo 'CONFIG_PACKAGE_odhcpd-ipv6only=y' >> .config
+        echo 'CONFIG_PACKAGE_samba36-server=y' >> .config
+        echo 'CONFIG_PACKAGE_kmod-usb-printer=y' >> .config
         make defconfig
 
     - name: 🏗️ 编译固件
-      run: cd source && make -j$(nproc) V=s
+      run: |
+        cd source
+        make -j$(nproc) V=s
 
-    - name: 🔍 检查大小
+    - name: 🔍 检查固件大小
       run: |
         for f in source/bin/targets/*/*/openwrt-*-*-squashfs-sysupgrade.bin; do
           [ -f "$f" ] || continue
           sz=$(stat -c%s "$f")
           echo "$f -> $sz 字节"
-          [ $sz -le 134217728 ] || { echo "❌ 超出闪存限制"; exit 1; }
+          if [ $sz -gt 134217728 ]; then
+            echo "❌ 固件超出 128MB 闪存限制"
+            exit 1
+          fi
         done
 
     - name: 📦 上传固件
