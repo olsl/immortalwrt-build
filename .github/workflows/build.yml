@@ -16,12 +16,12 @@ jobs:
     - name: Setup Source
       run: git clone --depth 1 -b openwrt-23.05 https://github.com/immortalwrt/immortalwrt.git firmware
 
-    - name: Create DTS Dir
+    - name: Create DTS Directory
       run: mkdir -p firmware/target/linux/mediatek/files-5.15/arch/arm64/boot/dts/mediatek
 
     - name: Write DTS File
       run: |
-        cat > firmware/target/linux/mediatek/files-5.15/arch/arm64/boot/dts/mediatek/wma301-v2.dts << 'EOF'
+        cat << 'EOF' > firmware/target/linux/mediatek/files-5.15/arch/arm64/boot/dts/mediatek/wma301-v2.dts
 /dts-v1/;
 / {
     compatible = "mediatek,mt7981-spim-snand-rfb";
@@ -58,20 +58,22 @@ EOF
 
     - name: Register Device
       run: |
-        echo "" >> firmware/target/linux/mediatek/image/mt798x.mk
-        echo "define Device/wma301-v2" >> firmware/target/linux/mediatek/image/mt798x.mk
-        echo "  DEVICE_VENDOR := Custom" >> firmware/target/linux/mediatek/image/mt798x.mk
-        echo "  DEVICE_MODEL := wma301 V2.0" >> firmware/target/linux/mediatek/image/mt798x.mk
-        echo "  DEVICE_DTS := wma301-v2" >> firmware/target/linux/mediatek/image/mt798x.mk
-        echo "  DEVICE_PACKAGES := kmod-usb-core kmod-usb-ohci kmod-usb2 block-mount p910nd samba4-server luci luci-ssl luci-i18n-base-zh-cn odhcp6c odhcpd-ipv6only wpad-basic-wolfssl" >> firmware/target/linux/mediatek/image/mt798x.mk
-        echo "  IMAGE_SIZE := 65536k" >> firmware/target/linux/mediatek/image/mt798x.mk
-        echo "  IMAGES += factory.bin sysupgrade.bin" >> firmware/target/linux/mediatek/image/mt798x.mk
-        echo "  IMAGE/sysupgrade.bin := \$(sysupgrade_bin) | check-size \$\$(IMAGE_SIZE)" >> firmware/target/linux/mediatek/image/mt798x.mk
-        echo "  IMAGE/factory.bin := \$(sysupgrade_bin) | check-size \$\$(IMAGE_SIZE)" >> firmware/target/linux/mediatek/image/mt798x.mk
-        echo "endef" >> firmware/target/linux/mediatek/image/mt798x.mk
-        echo "TARGET_DEVICES += wma301-v2" >> firmware/target/linux/mediatek/image/mt798x.mk
+        cat >> firmware/target/linux/mediatek/image/mt798x.mk << 'EOF'
 
-    - name: Generate Config
+define Device/wma301-v2
+  DEVICE_VENDOR := Custom
+  DEVICE_MODEL := wma301 V2.0
+  DEVICE_DTS := wma301-v2
+  DEVICE_PACKAGES := kmod-usb-core kmod-usb-ohci kmod-usb2 block-mount p910nd samba4-server luci luci-ssl luci-i18n-base-zh-cn odhcp6c odhcpd-ipv6only wpad-basic-wolfssl
+  IMAGE_SIZE := 65536k
+  IMAGES += factory.bin sysupgrade.bin
+  IMAGE/sysupgrade.bin := \$(sysupgrade_bin) | check-size \$\$(IMAGE_SIZE)
+  IMAGE/factory.bin := \$(sysupgrade_bin) | check-size \$\$(IMAGE_SIZE)
+endef
+TARGET_DEVICES += wma301-v2
+EOF
+
+    - name: Generate .config
       run: |
         cat > firmware/.config << 'EOF'
 CONFIG_TARGET_mediatek=y
@@ -102,7 +104,6 @@ EOF
       working-directory: firmware
       run: |
         make defconfig
-        make download -j$(nproc)
         make -j$(nproc)
 
     - name: Upload Artifacts
