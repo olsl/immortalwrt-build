@@ -1,4 +1,4 @@
-name: 编译 ImmortalWrt
+name: 编译 ImmortalWrt 固件
 on: workflow_dispatch
 jobs:
   build:
@@ -6,107 +6,85 @@ jobs:
     env:
       TARGET: mediatek
       SUBTARGET: filogic
-      DTS_FILENAME: mt7981b-wma301-ax3000-v2.dts
-      DTS_BASENAME: mt7981b-wma301-ax3000-v2
-      DEVICE_PROFILE: AX3000_V2
-      RAM_SIZE: 256
+      DTS_FILE: mt7981b-wma301-ax3000-v2.dts
+      PROFILE: WMA301_AX3000
     steps:
-    - name: 🧹 清理磁盘空间
+    - name: 🧹 清理空间
+      run: sudo rm -rf /usr/share/dotnet /opt/ghc && docker image prune -af
+
+    - name: 🔧 安装依赖
+      run: sudo apt-get update && sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk flex bison openssl libssl-dev gettext libelf-dev device-tree-compiler rsync git-core python3 unzip libtool-bin automake pkg-config ccache
+
+    - name: 📂 检查 DTS 文件
       run: |
-        df -h
-        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
-        docker image prune -a -f || true
-        
-    - name: 🔧 安装编译依赖
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential libncurses-dev zlib1g-dev \
-        gawk flex bison openssl libssl-dev gettext libelf-dev \
-        device-tree-compiler rsync git-core python3 unzip \
-        libtool-bin automake pkg-config ccache
-        
-    - name: 📂 检出源码
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        
-    - name: 📥 克隆 ImmortalWrt 源码
-      run: |
-        git clone -b openwrt-23.05 --depth 1 https://github.com/immortalwrt/immortalwrt source
-        cd source
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-        
-    - name: 📁 准备 DTS 文件
-      run: |
-        if [ ! -f "dts/${DTS_FILENAME}" ]; then
-          echo "❌ 未找到 DTS 文件: dts/${DTS_FILENAME}"
+        if [ ! -f "dts/${DTS_FILE}" ]; then
+          echo "❌ 错误：未找到 dts/${DTS_FILE}"
+          ls -la
           exit 1
         fi
-        
-    - name: 📂 将 DTS 文件复制到源码树
+
+    - name: 📥 克隆源码
+      run: git clone -b openwrt-23.05 --depth 1 https://github.com/immortalwrt/immortalwrt source && cd source && ./scripts/feeds update -a && ./scripts/feeds install -a
+
+    - name: 📁 复制 DTS
       run: |
         cd source
         mkdir -p target/linux/${TARGET}/dts
-        cp ../dts/${DTS_FILENAME} target/linux/${TARGET}/dts/
-        
-- name: 🔧 注册 Filogic 设备
-  run: |
-    IMAGE_MAKEFILE="target/linux/mediatek/filogic/image/Makefile"
-    if [ -f "$IMAGE_MAKEFILE" ]; then
-      if ! grep -q "Device/AX3000_V2" "$IMAGE_MAKEFILE"; then
-        cat >> "$IMAGE_MAKEFILE" << EOF
-define Device/AX3000_V2
+        cp ../dts/${DTS_FILE} target/linux/${TARGET}/dts/
+
+    - name: 🔧 注册新设备
+      run: |
+        DIR="source/target/linux/mediatek/filogic/image"
+        MAKEFILE="$DIR/Makefile"
+        mkdir -p "$DIR"
+        if [ ! -f "$MAKEFILE" ]; then
+          echo "Creating $MAKEFILE"
+          echo "include $(INCLUDE_DIR)/image.mk" > "$MAKEFILE"
+        fi
+        if ! grep -q "define Device/WMA301_AX3000" "$MAKEFILE"; then
+          cat >> "$MAKEFILE" << EOF
+
+define Device/WMA301_AX3000
   $(Device/filogic)
-  DEVICE_VENDOR := Custom
-  DEVICE_MODEL := WMA301
+  DEVICE_VENDOR := Wma301
+  DEVICE_MODEL := mt7981b-wma301-ax3000
   DEVICE_DTS := mt7981b-wma301-ax3000-v2
-  DEVICE_PACKAGES := wpad-basic-mbedtls kmod-MT7976CN kmod-MT7976CN kmod-MT7531AE luci relayd odhcpd-ipv6only samba36-server kmod-usb-printer
+  DEVICE_PACKAGES := wpad-basic-mbedtls luci relayd odhcpd-ipv6only samba36-server kmod-usb-printer
   SUPPORTED_DEVICES += mt7981b-wma301-ax3000-v2
 endef
-TARGET_DEVICES += AX3000_V2
+TARGET_DEVICES += WMA301_AX3000
 EOF
-      fi
-    fi
-    
-    - name: 🎛️ 配置编译选项
+        fi
+
+    - name: 🎛️ 生成配置
       run: |
         cd source
-        echo "CONFIG_TARGET=${TARGET}" >> .config
-        echo "CONFIG_TARGET_${TARGET}=y" >> .config
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE_PROFILE}=y" >> .config
+
+        echo "CONFIG_TARGET_mediatek=y" >> .config
+        echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
+        echo "CONFIG_TARGET_mediatek_filogic_DEVICE_WMA301_AX3000=y" >> .config
         echo "CONFIG_PACKAGE_u-boot-mediatek=y" >> .config
         echo "CONFIG_PACKAGE_u-boot-mediatek-images=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-MT7976CN=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-MT7976CN=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-MT7531AE=y" >> .config
         echo "CONFIG_PACKAGE_luci=y" >> .config
         echo "CONFIG_PACKAGE_relayd=y" >> .config
         echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
         echo "CONFIG_PACKAGE_samba36-server=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-printer=y" >> .config
         make defconfig
-        
+
     - name: 🏗️ 编译固件
+      run: cd source && make -j$(nproc) V=s
+
+    - name: 🔍 检查大小
       run: |
-        cd source
-        make -j$(nproc) V=s
-        
-    - name: 🔍 检查固件大小
-      run: |
-        FIRMWARE_DIR=source/bin/targets/${TARGET}/${SUBTARGET}
-        for bin in $FIRMWARE_DIR/*.bin; do
-          [ -f "$bin" ] || continue
-          size=$(stat -c%s "$bin")
-          echo "$bin -> $size bytes"
-          if [ $size -gt 134217728 ]; then
-            echo "❌ 固件超出闪存限制 ($size > 134217728)"
-            exit 1
-          fi
+        for f in source/bin/targets/*/*/openwrt-*-*-squashfs-sysupgrade.bin; do
+          [ -f "$f" ] || continue
+          sz=$(stat -c%s "$f")
+          echo "$f -> $sz 字节"
+          [ $sz -le 134217728 ] || { echo "❌ 超出闪存限制"; exit 1; }
         done
-        
-    - name: 📦 保存固件
+
+    - name: 📦 上传固件
       uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ github.run_number }}
