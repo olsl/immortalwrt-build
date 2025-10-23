@@ -21,13 +21,22 @@ jobs:
           device-tree-compiler rsync git-core python3 unzip \
           libtool-bin automake pkg-config ccache
 
-    - name: 📂 检查 DTS 文件
+    - name: 📂 检查 DTS 文件是否存在
       run: |
+        echo "🔍 当前目录内容："
+        find . -type f | sort
+        echo "📁 期望文件：dts/${DTS_FILE}"
+        
         if [ ! -f "dts/${DTS_FILE}" ]; then
           echo "❌ 错误：未找到 dts/${DTS_FILE}"
-          ls -la
+          echo "💡 请确认："
+          echo "   1. 文件已放入仓库根目录的 dts/ 文件夹"
+          echo "   2. 文件名完全匹配（包括大小写）"
+          echo "   3. 已执行 git add dts/ && git push"
+          echo "   4. .gitignore 未忽略该文件"
           exit 1
         fi
+        echo "✅ 成功找到 DTS 文件：${DTS_FILE}"
 
     - name: 📥 克隆源码
       run: |
