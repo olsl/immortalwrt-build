@@ -11,6 +11,12 @@ on:
 jobs:
   build-firmware:
     runs-on: ubuntu-latest
+    env:
+      TARGET: mediatek
+      SUBTARGET: filogic
+      DEVICE_PROFILE: V2_
+      DTS_FILENAME: mt7981b-wma301-ax3000-v2-.dts
+      DTS_BASENAME: mt7981b-wma301-ax3000-v2-
 
     steps:
     - name: 🧹 清理磁盘空间
@@ -46,17 +52,113 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
+    - name: 📁 准备 DTS 文件
+      run: |
+        # 检查仓库中是否存在 dts 目录
+        if [ ! -d "dts" ]; then
+          echo "❌ 未找到 dts 目录！请将 DTS 文件放在仓库根目录的 dts/ 目录下"
+          echo "✅ 正确结构示例:"
+          echo "   ├── dts/"
+          echo "   │   └── ${{ env.DTS_FILENAME }}"
+          echo "   └── .github/workflows/build.yml"
+          exit 1
+        fi
+        
+        # 检查 DTS 文件是否存在
+        if [ ! -f "dts/${{ env.DTS_FILENAME }}" ]; then
+          echo "❌ 未找到 DTS 文件: dts/${{ env.DTS_FILENAME }}"
+          echo "✅ 请确保文件已上传到 dts/ 目录"
+          exit 1
+        fi
+        
+        echo "✅ 找到 DTS 文件: dts/${{ env.DTS_FILENAME }}"
+        cat dts/${{ env.DTS_FILENAME }} | head -n 5
+
+    - name: 📂 将 DTS 文件复制到源码树
+      run: |
+        cd source
+        # 创建目标目录
+        mkdir -p target/linux/${{ env.TARGET }}/dts
+        
+        # 复制 DTS 文件
+        cp ../dts/${{ env.DTS_FILENAME }} target/linux/${{ env.TARGET }}/dts/
+        
+        # 检查是否需要修改 Makefile
+        MAKEFILE="target/linux/${{ env.TARGET }}/${{ env.SUBTARGET }}/Makefile"
+        if [ -f "$MAKEFILE" ]; then
+          echo "✅ 检测到 Makefile: $MAKEFILE"
+          
+          # 检查是否已包含 DTS
+          if ! grep -q "${{ env.DTS_BASENAME }}.dtb" "$MAKEFILE"; then
+            echo "🔧 正在更新 Makefile 以包含新 DTS..."
+            
+            # 备份 Makefile
+            cp "$MAKEFILE" "$MAKEFILE.bak"
+            
+            # 添加 DTS 到 DEVICE_DTS_CONFIG
+            if grep -q "DEVICE_DTS_CONFIG" "$MAKEFILE"; then
+              sed -i "/DEVICE_DTS_CONFIG/a \	${{ env.DTS_BASENAME }}.dtb \\" "$MAKEFILE"
+            else
+              # 如果没有 DEVICE_DTS_CONFIG，尝试添加到 DEVICE_DTS
+              if grep -q "DEVICE_DTS += " "$MAKEFILE"; then
+                sed -i "s/DEVICE_DTS += .*/& \${{ env.DTS_BASENAME }}/" "$MAKEFILE"
+              else
+                # 作为最后手段，直接添加
+                echo "" >> "$MAKEFILE"
+                echo "# 添加自定义设备" >> "$MAKEFILE"
+                echo "define Device/${{ env.DEVICE_PROFILE }}" >> "$MAKEFILE"
+                echo "  $(Device/${{ env.TARGET }})" >> "$MAKEFILE"
+                echo "  DEVICE_VENDOR := Custom" >> "$MAKEFILE"
+                echo "  DEVICE_MODEL := ${{ env.TARGET_DEVICE }}" >> "$MAKEFILE"
+                echo "  DEVICE_DTS := ${{ env.DTS_BASENAME }}" >> "$MAKEFILE"
+                echo "  DEVICE_PACKAGES := kmod-mt76-connac kmod-mt7603 kmod-mt76x2" >> "$MAKEFILE"
+                echo "endef" >> "$MAKEFILE"
+                echo "TARGET_DEVICES += ${{ env.DEVICE_PROFILE }}" >> "$MAKEFILE"
+              fi
+            fi
+            
+            echo "✅ Makefile 已更新"
+            echo "🔍 更新后的 Makefile 内容:"
+            grep -A 5 "${{ env.DTS_BASENAME }}" "$MAKEFILE" || cat "$MAKEFILE" | tail -n 10
+          else
+            echo "ℹ️ DTS 已包含在 Makefile 中，无需修改"
+          fi
+        else
+          echo "⚠️ 未找到 Makefile: $MAKEFILE，可能需要手动配置"
+        fi
+
     - name: 🎛️ 配置编译选项
       run: |
         cd source
         make defconfig
+        
+        # 设置目标架构
+        echo "CONFIG_TARGET=${{ env.TARGET }}" >> .config
+        echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> .config
+        echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
+        echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}_DEVICE_${{ env.DEVICE_PROFILE }}=y" >> .config
+        
+        # 配置 U-Boot
+        if [ -n "u-boot-mediatek" ]; then
+          echo "CONFIG_PACKAGE_u-boot-mediatek=y" >> .config
+          echo "CONFIG_PACKAGE_u-boot-mediatek-images=y" >> .config
+        fi
+        
+        # 配置功能
         printf "%s\\n" \
           "CONFIG_PACKAGE_luci=y" \
           "CONFIG_PACKAGE_relayd=y" \
           "CONFIG_PACKAGE_odhcpd_ipv6only=y" \
           "CONFIG_PACKAGE_samba36-server=y" \
           >> .config
+        
+        # 如果有WiFi芯片，确保相关驱动被包含
+        echo "CONFIG_PACKAGE_kmod-MT7976CN=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-MT7976CN=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-MT7531AE=y" >> .config
+        
         make defconfig
+        cat .config | grep -E 'CONFIG_TARGET|DEVICE_PROFILE|u-boot-mediatek|luci|relayd|odhcpd|samba'
 
     - name: 🏗️ 编译固件
       run: |
@@ -65,7 +167,7 @@ jobs:
 
     - name: 🔍 检查固件大小
       run: |
-        FIRMWARE_DIR=source/bin/targets/*/*
+        FIRMWARE_DIR=source/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}
         find $FIRMWARE_DIR -type f -name "*.bin" -o -name "*.img*" | xargs ls -lh
         for bin in $FIRMWARE_DIR/*.bin; do
           [ -f "$bin" ] || continue
@@ -82,7 +184,7 @@ jobs:
       with:
         name: firmware-${{ github.event.inputs.target_device }}-${{ github.run_number }}
         path: |
-          source/bin/targets/*/*
+          source/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/**
           source/build_dir/target*/logs/*.log
           source/staging_dir/toolchain*/info.mk
         retention-days: 90
@@ -94,3 +196,8 @@ jobs:
         echo "📥 固件已作为 Artifact 保存，请前往："
         echo "🔗 https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         echo "📂 下载名为 'firmware-MediaTek MT7981 RFB-X' 的压缩包获取固件文件。"
+        echo ""
+        echo "💡 重要提示: 确保使用匹配的 U-Boot 版本:"
+        echo "   - U-Boot 包: u-boot-mediatek"
+        echo "   - DTS 文件: ${{ env.DTS_FILENAME }}"
+        echo "   - 固件目标: ${{ env.TARGET }}/${{ env.SUBTARGET }} DEVICE=${{ env.DEVICE_PROFILE }}"
