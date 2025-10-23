@@ -10,17 +10,16 @@ jobs:
       DTS_FILE: mt7981b-wma301-ax3000-v2.dts
       PROFILE: WMA301_AX3000
     steps:
-    - name: 🧹 清理空间
+    - name: 🧹 清理工作区
       run: |
         sudo rm -rf /usr/share/dotnet /opt/ghc && docker image prune -af || true
-        rm -rf source/ temp-dts/ || true  # 彻底清理旧目录
+        rm -rf dts/ source/ || true
 
     - name: 📦 从 Base64 还原 DTS 文件
       run: |
         echo "🔧 正在重建 DTS 文件..."
-        DTS_DIR="source/target/linux/${TARGET}/dts"
-        mkdir -p "$DTS_DIR"
-        cat << 'EOF' | base64 -d > "$DTS_DIR/mt7981b-wma301-ax3000-v2.dts"
+        mkdir -p dts
+        cat << 'EOF' | base64 -d > "dts/mt7981b-wma301-ax3000-v2.dts"
         L2R0cy12MS87CgovIHsKCWNvbXBhdGlibGUgPSAibWVkaWF0ZWssbXQ3OTgxLXNwaW0tc25hbmQt
         cmZiIjsKCWludGVycnVwdC1wYXJlbnQgPSA8MHgwMT47CgkjYWRkcmVzcy1jZWxscyA9IDwweDAy
         PjsKCSNzaXplLWNlbGxzID0gPDB4MDI+OwoJbW9kZWwgPSAiTWVkaWFUZWsgTVQ3OTgxIFJGQiI7
@@ -385,9 +384,9 @@ jobs:
         b2RlID0gInNnbWlpIjsKCgkJCWZpeGVkLWxpbmsgewoJCQkJc3BlZWQgPSA8MHg5YzQ+OwoJCQkJ
         ZnVsbC1kdXBsZXg7CgkJCX07CgkJfTsKCX07Cn07Cg==
         EOF
-        echo "✅ 成功写入: $DTS_DIR/mt7981b-wma301-ax3000-v2.dts"
+        echo "✅ 成功生成: dts/mt7981b-wma301-ax3000-v2.dts"
 
-    - name: 🧹 清理旧源码（防止克隆失败）
+    - name: 🧹 清理旧源码目录
       run: rm -rf source/ || true
 
     - name: 📥 克隆 ImmortalWrt 源码
@@ -397,10 +396,13 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 📁 复制内嵌 DTS 到编译目录
+    - name: 📁 复制 DTS 到目标架构目录
       run: |
         cd source
-        cp -v "../source/target/linux/${TARGET}/dts/mt7981b-wma301-ax3000-v2.dts" "target/linux/${TARGET}/dts/"
+        DST_DIR="target/linux/${TARGET}/dts"
+        mkdir -p "$DST_DIR"
+        cp "../dts/${DTS_FILE}" "$DST_DIR/"
+        echo "✅ DTS 文件已就位: $DST_DIR/${DTS_FILE}"
 
     - name: 🔧 注册新设备
       run: >-
@@ -442,7 +444,7 @@ jobs:
         echo "⏳ 正在编译... 使用 $(nproc) 个线程"
         make -j$(nproc) V=s
 
-    - name: 🔍 检查生成的固件大小
+    - name: 🔍 检查固件大小
       run: |
         cd source
         for f in bin/targets/*/*/openwrt-*-*-squashfs-sysupgrade.bin; do
