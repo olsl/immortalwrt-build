@@ -1,8 +1,8 @@
-name: Build wma301 V2.0 Firmware
+name: Build wma301 V2.0
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   workflow_dispatch:
 
 jobs:
@@ -13,9 +13,12 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Setup OpenWrt Source
+    - name: Setup Source
       run: |
         git clone --depth 1 -b openwrt-23.05 https://github.com/immortalwrt/immortalwrt.git firmware
+
+    - name: Create DTS Dir
+      run: |
         mkdir -p firmware/target/linux/mediatek/files-5.15/arch/arm64/boot/dts/mediatek
 
     - name: Write DTS File
@@ -23,44 +26,51 @@ jobs:
         cat > firmware/target/linux/mediatek/files-5.15/arch/arm64/boot/dts/mediatek/wma301-v2.dts << 'EOF'
 /dts-v1/;
 / {
-	compatible = "mediatek,mt7981-spim-snand-rfb";
-	model = "wma301 V2.0";
+    compatible = "mediatek,mt7981-spim-snand-rfb";
+    model = "wma301 V2.0";
 
-	cpus {
-		cpu@0 { compatible = "arm,cortex-a53"; reg = <0>; enable-method = "psci"; };
-		cpu@1 { compatible = "arm,cortex-a53"; reg = <1>; enable-method = "psci"; };
-	};
+    cpus {
+        #address-cells = <1>;
+        #size-cells = <0>;
 
-	serial@11002000 {
-		compatible = "mediatek,mt6577-uart";
-		reg = <0x00 0x11002000 0x00 0x400>;
-		interrupts = <0x00 0x7b 0x04>;
-		status = "okay";
-	};
+        cpu@0 {
+            device_type = "cpu";
+            compatible = "arm,cortex-a53";
+            reg = <0>;
+            enable-method = "psci";
+        };
 
-	&snfi {
-		status = "okay";
-	};
+        cpu@1 {
+            device_type = "cpu";
+            compatible = "arm,cortex-a53";
+            reg = <1>;
+            enable-method = "psci";
+        };
+    };
 
-	&spi0 {
-		status = "okay";
-	};
+    chosen {
+        bootargs = "console=ttyS0,115200n1 earlycon=uart8250,mmio32,0x11002000";
+    };
 
-	&ethernet {
-		status = "okay";
-	};
+    memory {
+        reg = <0x00 0x40000000 0x00 0x10000000>;
+    };
 
-	&xhci {
-		status = "okay";
-	};
+    &snfi {
+        status = "okay";
+    };
 
-	memory {
-		reg = <0x00 0x40000000 0x00 0x10000000>;
-	};
+    &spi0 {
+        status = "okay";
+    };
 
-	chosen {
-		bootargs = "console=ttyS0,115200n1 earlycon=uart8250,mmio32,0x11002000";
-	};
+    &ethernet {
+        status = "okay";
+    };
+
+    &xhci {
+        status = "okay";
+    };
 };
 EOF
 
@@ -79,7 +89,7 @@ EOF
         echo "endef" >> firmware/target/linux/mediatek/image/mt798x.mk
         echo "TARGET_DEVICES += wma301-v2" >> firmware/target/linux/mediatek/image/mt798x.mk
 
-    - name: Generate .config
+    - name: Generate Config
       run: |
         cat > firmware/.config << 'EOF'
 CONFIG_TARGET_mediatek=y
@@ -97,6 +107,7 @@ CONFIG_PACKAGE_kmod-usb-ohci=y
 CONFIG_PACKAGE_kmod-usb2=y
 CONFIG_PACKAGE_block-mount=y
 CONFIG_PACKAGE_wpad-basic-wolfssl=y
+CONFIG_DEVEL=y
 EOF
 
     - name: Update Feeds
@@ -109,6 +120,7 @@ EOF
       working-directory: firmware
       run: |
         make defconfig
+        make download -j$(nproc)
         make -j$(nproc)
 
     - name: Upload Artifacts
