@@ -48,27 +48,32 @@ jobs:
         MAKEFILE="$DIR/Makefile";
         mkdir -p "$DIR";
         if [ ! -f "$MAKEFILE" ]; then
-          echo "include \\\$(INCLUDE_DIR)/image.mk" > "$MAKEFILE";
+          echo 'include \$(INCLUDE_DIR)/image.mk' > "$MAKEFILE";
         fi;
         if ! grep -q "define Device/WMA301_AX3000" "$MAKEFILE"; then
-          cat >> "$MAKEFILE" << 'EOF'
-          define Device/WMA301_AX3000
-            $(Device/filogic)
-            DEVICE_VENDOR := Wma301
-            DEVICE_MODEL := mt7981b-wma301-ax3000
-            DEVICE_DTS := mt7981b-wma301-ax3000-v2
-            DEVICE_PACKAGES := wpad-basic-mbedtls luci relayd odhcpd-ipv6only samba36-server kmod-usb-printer
-            SUPPORTED_DEVICES += mt7981b-wma301-ax3000-v2
-          endef
-          TARGET_DEVICES += WMA301_AX3000
-          EOF
+          echo 'define Device/WMA301_AX3000' >> "$MAKEFILE";           echo '  $(Device/filogic)' >> "$MAKEFILE";           echo '  DEVICE_VENDOR := Wma301' >> "$MAKEFILE";           echo '  DEVICE_MODEL := mt7981b-wma301-ax3000' >> "$MAKEFILE";           echo '  DEVICE_DTS := mt7981b-wma301-ax3000-v2' >> "$MAKEFILE";           echo '  DEVICE_PACKAGES := wpad-basic-mbedtls kmod-leds-gpio kmod-input-gpio-buttons kmod-mt7976cn kmod-mt7531ae luci relayd odhcpd-ipv6only samba36-server kmod-usb-printer kmod-of-mediatek-pinctrl' >> "$MAKEFILE";           echo '  SUPPORTED_DEVICES += mt7981b-wma301-ax3000-v2' >> "$MAKEFILE";           echo 'endef' >> "$MAKEFILE";           echo 'TARGET_DEVICES += WMA301_AX3000' >> "$MAKEFILE"
         fi
 
     - name: 🎛️ 生成配置
       run: |
         cd source
         touch .config
-        echo 'CONFIG_TARGET_mediatek=y' >> .config; echo 'CONFIG_TARGET_mediatek_filogic=y' >> .config; echo 'CONFIG_TARGET_mediatek_filogic_DEVICE_WMA301_AX3000=y' >> .config; echo 'CONFIG_PACKAGE_u-boot-mediatek=y' >> .config; echo 'CONFIG_PACKAGE_u-boot-mediatek-images=y' >> .config; echo 'CONFIG_PACKAGE_luci=y' >> .config; echo 'CONFIG_PACKAGE_relayd=y' >> .config; echo 'CONFIG_PACKAGE_odhcpd-ipv6only=y' >> .config; echo 'CONFIG_PACKAGE_samba36-server=y' >> .config; echo 'CONFIG_PACKAGE_kmod-usb-printer=y' >> .config
+        echo 'CONFIG_TARGET_mediatek=y' >> .config
+        echo 'CONFIG_TARGET_mediatek_filogic=y' >> .config
+        echo 'CONFIG_TARGET_mediatek_filogic_DEVICE_WMA301_AX3000=y' >> .config
+        echo 'CONFIG_PACKAGE_u-boot-mediatek=y' >> .config
+        echo 'CONFIG_PACKAGE_u-boot-mediatek-images=y' >> .config
+        echo 'CONFIG_PACKAGE_kmod-leds-gpio=y' >> .config
+        echo 'CONFIG_PACKAGE_kmod-input-gpio-buttons=y' >> .config
+        echo 'CONFIG_PACKAGE_kmod-of-mediatek-pinctrl=y' >> .config
+        echo 'CONFIG_PACKAGE_luci=y' >> .config
+        echo 'CONFIG_PACKAGE_relayd=y' >> .config
+        echo 'CONFIG_PACKAGE_odhcpd-ipv6only=y' >> .config
+        echo 'CONFIG_PACKAGE_samba36-server=y' >> .config
+        echo 'CONFIG_PACKAGE_kmod-usb-printer=y' >> .config
+        echo 'CONFIG_PACKAGE_kmod-mt7976cn=y' >> .config
+        echo 'CONFIG_PACKAGE_kmod-mt7976cn=y' >> .config
+        echo 'CONFIG_PACKAGE_kmod-mt7531ae=y' >> .config
         make defconfig
 
     - name: 🏗️ 编译固件
