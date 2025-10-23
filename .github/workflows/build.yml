@@ -1,4 +1,4 @@
-name: Build ImmortalWrt for Custom Device
+name: Build ImmortalWrt for wma301 V2.0
 
 on:
   push:
@@ -9,89 +9,631 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
-    env:
-      DEVICE_DTS_DIR: dts
-      TARGET: mediatek
-      SUBTARGET: mt798x
-      IMAGE_SIZE: 65536k
-      KERNEL_SIZE: 16128k
-      REPO_URL: https://github.com/immortalwrt/immortalwrt.git
-      BRANCH: openwrt-23.05
-
     steps:
-    - name: Checkout Repository
+    - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Find DTS File
-      id: find_dts
+    - name: Setup Source
       run: |
-        if [ ! -d "${{ env.DEVICE_DTS_DIR }}" ]; then
-          echo "❌ Directory '/${{ env.DEVICE_DTS_DIR }}' not found!"
-          exit 1
-        fi
-        dts_file=$(find "${{ env.DEVICE_DTS_DIR }}" -name "*.dts" | head -n1)
-        if [ -z "$dts_file" ]; then
-          echo "❌ No .dts file found in /${{ env.DEVICE_DTS_DIR }}/"
-          exit 1
-        fi
-        device_name=$(basename "$dts_file" .dts)
-        echo "device_name=$device_name" >> "$GITHUB_OUTPUT"
-        echo "device_dts_path=$dts_file" >> "$GITHUB_OUTPUT"
+        git clone --depth 1 -b openwrt-23.05 https://github.com/immortalwrt/immortalwrt.git source
+        cd source
 
-    - name: Setup Source Code
-      run: |
-        mkdir -p "$HOME/openwrt/source"
-        git clone --depth 1 -b ${{ env.BRANCH }} ${{ env.REPO_URL }} "$HOME/openwrt/source"
+        # 创建 DTS 目录并写入你的设备树
+        mkdir -p target/linux/mediatek/files-5.15/arch/arm64/boot/dts/mediatek
+        cat > target/linux/mediatek/files-5.15/arch/arm64/boot/dts/mediatek/wma301-v2.dts << 'EOF'
+/dts-v1/;
+/ {
+	compatible = "mediatek,mt7981-spim-snand-rfb";
+	interrupt-parent = <0x01>;
+	#address-cells = <0x02>;
+	#size-cells = <0x02>;
+	model = "wma301 V2.0";
 
-    - name: Copy DTS to Target Path
-      run: |
-        dst_dir="$HOME/openwrt/source/target/linux/mediatek/files-5.15/arch/arm64/boot/dts/mediatek"
-        mkdir -p "$dst_dir"
-        cp "${{ steps.find_dts.outputs.device_dts_path }}" "$dst_dir/${{ steps.find_dts.outputs.device_name }}.dts"
+	cpus {
+		#address-cells = <0x01>;
+		#size-cells = <0x00>;
 
-    - name: Check If Device Already Defined
-      id: check_device
-      run: |
-        mk_file="$HOME/openwrt/source/target/linux/mediatek/image/mt798x.mk"
-        if grep -q "define Device/${{ steps.find_dts.outputs.device_name }}" "$mk_file"; then
-          echo "already_supported=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "already_supported=false" >> "$GITHUB_OUTPUT"
-        fi
+		cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a53";
+			enable-method = "psci";
+			reg = <0x00>;
+		};
 
-    - name: Register New Device
-      if: steps.check_device.outputs.already_supported == 'false'
-      run: |
-        name='${{ steps.find_dts.outputs.device_name }}'
-        file="$HOME/openwrt/source/target/linux/mediatek/image/mt798x.mk"
-        cat >> "$file" << EOF
+		cpu@1 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a53";
+			enable-method = "psci";
+			reg = <0x01>;
+		};
+	};
 
-# Auto-registered by CI
-define Device/$name
-  DEVICE_VENDOR := Custom
-  DEVICE_MODEL := \$$(DEVICE_VENDOR) $name
-  DEVICE_DTS := $name
-  DEVICE_PACKAGES := kmod-usb-core kmod-usb-ohci kmod-usb2 kmod-usb-ledtrig-usbport block-mount e2fsprogs fdisk usbutils lsblk printenv p910nd samba4-server samba4-client kmod-fs-ntfs ntfs-3g mount.ntfs luci luci-ssl luci-i18n-base-zh-cn odhcp6c odhcpd-ipv6only wpad-basic-wolfssl hostapd-common kmod-ipt-nat6
-  KERNEL_SIZE := ${{ env.KERNEL_SIZE }}
-  IMAGE_SIZE := ${{ env.IMAGE_SIZE }}
-  IMAGES += factory.bin sysupgrade.bin
-  IMAGE/factory.bin := \$\$(sysupgrade_bin) | check-size \$\$\$(IMAGE_SIZE)
-  IMAGE/sysupgrade.bin := \$\$(sysupgrade_bin) | check-size \$\$\$(IMAGE_SIZE)
-endef
-TARGET_DEVICES += $name
+	pwm@10048000 {
+		compatible = "mediatek,mt7981-pwm";
+		reg = <0x00 0x10048000 0x00 0x1000>;
+		#pwm-cells = <0x02>;
+		clocks = <0x02 0x0d 0x02 0x0c 0x02 0x0e 0x02 0x0f 0x02 0x10>;
+		clock-names = "top\0main\0pwm1\0pwm2\0pwm3";
+	};
+
+	thermal-zones {
+		cpu-thermal {
+			polling-delay-passive = <0x3e8>;
+			polling-delay = <0x3e8>;
+			thermal-sensors = <0x03 0x00>;
+		};
+	};
+
+	thermal@1100c800 {
+		#thermal-sensor-cells = <0x01>;
+		compatible = "mediatek,mt7981-thermal";
+		reg = <0x00 0x1100c800 0x00 0x800>;
+		interrupts = <0x00 0x8a 0x04>;
+		clocks = <0x02 0x1c 0x02 0x2f 0x02 0x30>;
+		clock-names = "therm\0auxadc\0adc_32k";
+		mediatek,auxadc = <0x04>;
+		mediatek,apmixedsys = <0x05>;
+		nvmem-cells = <0x06>;
+		nvmem-cell-names = "calibration-data";
+		phandle = <0x03>;
+	};
+
+	adc@1100d000 {
+		compatible = "mediatek,mt7981-auxadc\0mediatek,mt7622-auxadc";
+		reg = <0x00 0x1100d000 0x00 0x1000>;
+		clocks = <0x02 0x2f 0x02 0x30>;
+		clock-names = "main\032k";
+		#io-channel-cells = <0x01>;
+		phandle = <0x04>;
+	};
+
+	wed@15010000 {
+		compatible = "mediatek,wed";
+		wed_num = <0x02>;
+		pci_slot_map = <0x00 0x01>;
+		reg = <0x00 0x15010000 0x00 0x1000 0x00 0x15011000 0x00 0x1000>;
+		interrupt-parent = <0x01>;
+		interrupts = <0x00 0xcd 0x04 0x00 0xce 0x04>;
+		dy_txbm_enable = "true";
+		dy_txbm_budget = <0x08>;
+		txbm_init_sz = <0x08>;
+		txbm_max_sz = <0x20>;
+		status = "okay";
+	};
+
+	wdma@15104800 {
+		compatible = "mediatek,wed-wdma";
+		reg = <0x00 0x15104800 0x00 0x400 0x00 0x15104c00 0x00 0x400>;
+	};
+
+	ap2woccif@151A5000 {
+		compatible = "mediatek,ap2woccif";
+		reg = <0x00 0x151a5000 0x00 0x1000 0x00 0x151ad000 0x00 0x1000>;
+		interrupt-parent = <0x01>;
+		interrupts = <0x00 0xd3 0x04 0x00 0xd4 0x04>;
+	};
+
+	wocpu0_ilm@151E0000 {
+		compatible = "mediatek,wocpu0_ilm";
+		reg = <0x00 0x151e0000 0x00 0x8000>;
+	};
+
+	wocpu_dlm@151E8000 {
+		compatible = "mediatek,wocpu_dlm";
+		reg = <0x00 0x151e8000 0x00 0x2000 0x00 0x151f8000 0x00 0x2000>;
+		resets = <0x07 0x00>;
+		reset-names = "wocpu_rst";
+	};
+
+	wocpu_boot@15194000 {
+		compatible = "mediatek,wocpu_boot";
+		reg = <0x00 0x15194000 0x00 0x1000>;
+	};
+
+	reserved-memory {
+		#address-cells = <0x02>;
+		#size-cells = <0x02>;
+		ranges;
+
+		secmon@43000000 {
+			reg = <0x00 0x43000000 0x00 0x30000>;
+			no-map;
+		};
+
+		wmcpu-reserved@47C80000 {
+			compatible = "mediatek,wmcpu-reserved";
+			no-map;
+			reg = <0x00 0x47c80000 0x00 0x100000>;
+			phandle = <0x16>;
+		};
+
+		wocpu0_emi@47D80000 {
+			compatible = "mediatek,wocpu0_emi";
+			no-map;
+			reg = <0x00 0x47d80000 0x00 0x40000>;
+			shared = <0x00>;
+		};
+
+		wocpu_data@47DC0000 {
+			compatible = "mediatek,wocpu_data";
+			no-map;
+			reg = <0x00 0x47dc0000 0x00 0x240000>;
+			shared = <0x01>;
+		};
+	};
+
+	psci {
+		compatible = "arm,psci-0.2";
+		method = "smc";
+	};
+
+	oscillator@0 {
+		compatible = "fixed-clock";
+		#clock-cells = <0x00>;
+		clock-frequency = <0x2625a00>;
+		clock-output-names = "clkxtal";
+		phandle = <0x1c>;
+	};
+
+	infracfg_ao@10001000 {
+		compatible = "mediatek,mt7981-infracfg_ao\0syscon";
+		reg = <0x00 0x10001000 0x00 0x68>;
+		#clock-cells = <0x01>;
+		phandle = <0x02>;
+	};
+
+	infracfg@10001040 {
+		compatible = "mediatek,mt7981-infracfg\0syscon";
+		reg = <0x00 0x10001068 0x00 0x1000>;
+		#clock-cells = <0x01>;
+		phandle = <0x09>;
+	};
+
+	topckgen@1001B000 {
+		compatible = "mediatek,mt7981-topckgen\0syscon";
+		reg = <0x00 0x1001b000 0x00 0x1000>;
+		#clock-cells = <0x01>;
+		phandle = <0x08>;
+	};
+
+	apmixedsys@1001E000 {
+		compatible = "mediatek,mt7981-apmixedsys\0syscon";
+		reg = <0x00 0x1001e000 0x00 0x1000>;
+		#clock-cells = <0x01>;
+		phandle = <0x05>;
+	};
+
+	dummy_system_clk {
+		compatible = "fixed-clock";
+		clock-frequency = <0x2625a00>;
+		#clock-cells = <0x00>;
+		phandle = <0x18>;
+	};
+
+	dummy_gpt_clk {
+		compatible = "fixed-clock";
+		clock-frequency = <0x1312d00>;
+		#clock-cells = <0x00>;
+	};
+
+	timer {
+		compatible = "arm,armv8-timer";
+		interrupt-parent = <0x01>;
+		clock-frequency = <0xc65d40>;
+		interrupts = <0x01 0x0d 0x08 0x01 0x0e 0x08 0x01 0x0b 0x08 0x01 0x0a 0x08>;
+	};
+
+	watchdog@1001c000 {
+		compatible = "mediatek,mt7622-wdt\0mediatek,mt6589-wdt";
+		reg = <0x00 0x1001c000 0x00 0x1000>;
+		interrupts = <0x00 0x6e 0x04>;
+		#reset-cells = <0x01>;
+		status = "okay";
+	};
+
+	interrupt-controller@c000000 {
+		compatible = "arm,gic-v3";
+		#interrupt-cells = <0x03>;
+		interrupt-parent = <0x01>;
+		interrupt-controller;
+		reg = <0x00 0xc000000 0x00 0x40000 0x00 0xc080000 0x00 0x200000>;
+		interrupts = <0x01 0x09 0x04>;
+		phandle = <0x01>;
+	};
+
+	trng@1020f000 {
+		compatible = "mediatek,mt7981-rng";
+	};
+
+	serial@11002000 {
+		compatible = "mediatek,mt6577-uart";
+		reg = <0x00 0x11002000 0x00 0x400>;
+		interrupts = <0x00 0x7b 0x04>;
+		clocks = <0x02 0x1e>;
+		assigned-clocks = <0x08 0x50 0x02 0x00>;
+		assigned-clock-parents = <0x08 0x00 0x09 0x01>;
+		status = "okay";
+	};
+
+	i2c@11007000 {
+		compatible = "mediatek,mt7981-i2c";
+		reg = <0x00 0x11007000 0x00 0x1000 0x00 0x10217080 0x00 0x80>;
+		interrupts = <0x00 0x88 0x04>;
+		clock-div = <0x01>;
+		clocks = <0x02 0x1d 0x02 0x19>;
+		clock-names = "main\0dma";
+		#address-cells = <0x01>;
+		#size-cells = <0x00>;
+		status = "disabled";
+	};
+
+	pcie@11280000 {
+		compatible = "mediatek,mt7981-pcie\0mediatek,mt7986-pcie";
+		device_type = "pci";
+		reg = <0x00 0x11280000 0x00 0x4000>;
+		reg-names = "pcie-mac";
+		#address-cells = <0x03>;
+		#size-cells = <0x02>;
+		interrupts = <0x00 0xa8 0x04>;
+		bus-range = <0x00 0xff>;
+		ranges = <0x82000000 0x00 0x20000000 0x00 0x20000000 0x00 0x10000000>;
+		status = "disabled";
+		clocks = <0x02 0x38 0x02 0x39 0x02 0x3a 0x02 0x3b>;
+		phys = <0x0a 0x02>;
+		phy-names = "pcie-phy";
+		#interrupt-cells = <0x01>;
+		interrupt-map-mask = <0x00 0x00 0x00 0x07>;
+		interrupt-map = <0x00 0x00 0x00 0x01 0x0b 0x00 0x00 0x00 0x00 0x02 0x0b 0x01 0x00 0x00 0x00 0x03 0x0b 0x02 0x00 0x00 0x00 0x04 0x0b 0x03>;
+
+		interrupt-controller {
+			interrupt-controller;
+			#address-cells = <0x00>;
+			#interrupt-cells = <0x01>;
+			phandle = <0x0b>;
+		};
+	};
+
+	crypto@10320000 {
+		compatible = "inside-secure,safexcel-eip97";
+		reg = <0x00 0x10320000 0x00 0x40000>;
+		interrupts = <0x00 0x74 0x04 0x00 0x75 0x04 0x00 0x76 0x04 0x00 0x77 0x04>;
+		interrupt-names = "ring0\0ring1\0ring2\0ring3";
+		clocks = <0x08 0x42>;
+		clock-names = "top_eip97_ck";
+		assigned-clocks = <0x08 0x63>;
+		assigned-clock-parents = <0x08 0x15>;
+	};
+
+	pinctrl@11d00000 {
+		compatible = "mediatek,mt7981-pinctrl";
+		reg = <0x00 0x11d00000 0x00 0x1000 0x00 0x11c00000 0x00 0x1000 0x00 0x11c10000 0x00 0x1000 0x00 0x11d20000 0x00 0x1000 0x00 0x11e00000 0x00 0x1000 0x00 0x11e20000 0x00 0x1000 0x00 0x11f00000 0x00 0x1000 0x00 0x11f10000 0x00 0x1000 0x00 0x1000b000 0x00 0x1000>;
+		reg-names = "gpio_base\0iocfg_rt_base\0iocfg_rm_base\0iocfg_rb_base\0iocfg_lb_base\0iocfg_bl_base\0iocfg_tm_base\0iocfg_tl_base\0eint";
+		gpio-controller;
+		#gpio-cells = <0x02>;
+		gpio-ranges = <0x0c 0x00 0x00 0x38>;
+		interrupt-controller;
+		interrupts = <0x00 0xe1 0x04>;
+		interrupt-parent = <0x01>;
+		#interrupt-cells = <0x02>;
+		phandle = <0x0c>;
+	};
+
+	syscon@15000000 {
+		#address-cells = <0x01>;
+		#size-cells = <0x01>;
+		compatible = "mediatek,mt7981-ethsys\0syscon";
+		reg = <0x00 0x15000000 0x00 0x1000>;
+		#clock-cells = <0x01>;
+		#reset-cells = <0x01>;
+		phandle = <0x0d>;
+
+		reset-controller {
+			compatible = "ti,syscon-reset";
+			#reset-cells = <0x01>;
+			ti,reset-bits = <0x34 0x04 0x34 0x04 0x34 0x04 0x28>;
+			phandle = <0x07>;
+		};
+	};
+
+	ethernet@15100000 {
+		compatible = "mediatek,mt7981-eth";
+		reg = <0x00 0x15100000 0x00 0x80000>;
+		interrupts = <0x00 0xc4 0x04 0x00 0xc5 0x04 0x00 0xc6 0x04 0x00 0xc7 0x04>;
+		clocks = <0x0d 0x00 0x0d 0x01 0x0d 0x02 0x0d 0x03 0x0e 0x00 0x0e 0x01 0x0e 0x02 0x0e 0x03 0x0f 0x00 0x0f 0x01 0x0f 0x02 0x0f 0x03>;
+		clock-names = "fe\0gp2\0gp1\0wocpu0\0sgmii_tx250m\0sgmii_rx250m\0sgmii_cdr_ref\0sgmii_cdr_fb\0sgmii2_tx250m\0sgmii2_rx250m\0sgmii2_cdr_ref\0sgmii2_cdr_fb";
+		assigned-clocks = <0x08 0x60 0x08 0x61>;
+		assigned-clock-parents = <0x08 0x1b 0x08 0x22>;
+		mediatek,ethsys = <0x0d>;
+		mediatek,sgmiisys = <0x0e 0x0f>;
+		mediatek,infracfg = <0x10>;
+		#reset-cells = <0x01>;
+		#address-cells = <0x01>;
+		#size-cells = <0x00>;
+		status = "okay";
+
+		mac@0 {
+			compatible = "mediatek,eth-mac";
+			reg = <0x00>;
+			phy-mode = "2500base-x";
+			phandle = <0x13>;
+
+			fixed-link {
+				speed = <0x9c4>;
+				full-duplex;
+				pause;
+			};
+		};
+
+		mac@1 {
+			compatible = "mediatek,eth-mac";
+			reg = <0x01>;
+			phy-mode = "gmii";
+			phy-handle = <0x11>;
+		};
+
+		mdio-bus {
+			#address-cells = <0x01>;
+			#size-cells = <0x00>;
+			phandle = <0x1e>;
+
+			ethernet-phy@0 {
+				compatible = "ethernet-phy-id03a2.9461";
+				reg = <0x00>;
+				phy-mode = "gmii";
+				nvmem-cells = <0x12>;
+				nvmem-cell-names = "phy-cal-data";
+				phandle = <0x11>;
+			};
+
+			switch@0 {
+				compatible = "mediatek,mt7531";
+				reg = <0x1f>;
+				reset-gpios = <0x0c 0x27 0x00>;
+
+				ports {
+					#address-cells = <0x01>;
+					#size-cells = <0x00>;
+
+					port@0 {
+						reg = <0x00>;
+						label = "lan1";
+					};
+
+					port@1 {
+						reg = <0x01>;
+						label = "lan2";
+					};
+
+					port@2 {
+						reg = <0x02>;
+						label = "lan3";
+					};
+
+					port@3 {
+						reg = <0x03>;
+						label = "lan4";
+					};
+
+					port@6 {
+						reg = <0x06>;
+						label = "cpu";
+						ethernet = <0x13>;
+						phy-mode = "2500base-x";
+
+						fixed-link {
+							speed = <0x9c4>;
+							full-duplex;
+							pause;
+						};
+					};
+				};
+			};
+		};
+	};
+
+	hnat@15000000 {
+		compatible = "mediatek,mtk-hnat_v4";
+		reg = <0x00 0x15100000 0x00 0x80000>;
+		resets = <0x0d 0x00>;
+		reset-names = "mtketh";
+		status = "okay";
+		mtketh-wan = "eth0.6";
+		mtketh-lan = "eth0";
+		mtketh-max-gmac = <0x02>;
+	};
+
+	snfi@11005000 {
+		compatible = "mediatek,mt7986-snand";
+		reg = <0x00 0x11005000 0x00 0x1000 0x00 0x11006000 0x00 0x1000>;
+		reg-names = "nfi\0ecc";
+		interrupts = <0x00 0x79 0x04>;
+		clocks = <0x02 0x24 0x02 0x23 0x02 0x25>;
+		clock-names = "pad_clk\0nfi_clk\0nfi_hclk";
+		assigned-clocks = <0x08 0x4d 0x08 0x4c>;
+		assigned-clock-parents = <0x08 0x06 0x08 0x06>;
+		#address-cells = <0x01>;
+		#size-cells = <0x00>;
+		status = "disabled";
+	};
+
+	spi@1100a000 {
+		compatible = "mediatek,ipm-spi-quad";
+		reg = <0x00 0x1100a000 0x00 0x100>;
+		interrupts = <0x00 0x8c 0x04>;
+		clocks = <0x08 0x02 0x08 0x4e 0x02 0x26 0x02 0x28>;
+		clock-names = "parent-clk\0sel-clk\0spi-clk\0spi-hclk";
+		status = "okay";
+		pinctrl-names = "default";
+		pinctrl-0 = <0x0c 0x14>;
+
+		spi_nand@0 {
+			#address-cells = <0x01>;
+			#size-cells = <0x01>;
+			compatible = "spi-nand";
+			reg = <0x00>;
+			spi-max-frequency = <0x2625a00>;
+			spi-tx-buswidth = <0x04>;
+			spi-rx-buswidth = <0x04>;
+			phandle = <0x1d>;
+		};
+	};
+
+	consys@10000000 {
+		compatible = "mediatek,mt7981-consys";
+		reg = <0x00 0x10000000 0x00 0x8600000>;
+		memory-region = <0x16>;
+	};
+
+	xhci@11200000 {
+		compatible = "mediatek,mt7986-xhci\0mediatek,mtk-xhci";
+		reg = <0x00 0x11200000 0x00 0x2e00 0x00 0x11203e00 0x00 0x100>;
+		reg-names = "mac\0ippc";
+		interrupts = <0x00 0xad 0x04>;
+		phys = <0x17 0x03 0x0a 0x04>;
+		clocks = <0x18 0x18 0x18 0x18 0x18>;
+		clock-names = "sys_ck\0xhci_ck\0ref_ck\0mcu_ck\0dma_ck";
+		#address-cells = <0x02>;
+		#size-cells = <0x02>;
+		mediatek,u3p-dis-msk = <0x00>;
+		status = "okay";
+	};
+
+	usb-phy@11e10000 {
+		compatible = "mediatek,mt7986\0mediatek,generic-tphy-v2";
+		#address-cells = <0x02>;
+		#size-cells = <0x02>;
+		ranges;
+		status = "okay";
+
+		usb-phy@11e10000 {
+			reg = <0x00 0x11e10000 0x00 0x700>;
+			clocks = <0x18>;
+			clock-names = "ref";
+			#phy-cells = <0x01>;
+			status = "okay";
+			phandle = <0x17>;
+		};
+
+		usb-phy@11e10700 {
+			reg = <0x00 0x11e10700 0x00 0x900>;
+			clocks = <0x18>;
+			clock-names = "ref";
+			#phy-cells = <0x01>;
+			mediatek,syscon-type = <0x10 0x218 0x00>;
+			nvmem-cells = <0x19 0x1a 0x1b>;
+			nvmem-cell-names = "intr\0rx_imp\0tx_imp";
+			status = "okay";
+			phandle = <0x0a>;
+		};
+	};
+
+	chosen {
+		bootargs = "console=ttyS0,115200n1 loglevel=8 earlycon=uart8250,mmio32,0x11002000";
+	};
+
+	memory {
+		reg = <0x00 0x40000000 0x00 0x10000000>;
+	};
+
+	nmbm_spim_nand {
+		compatible = "generic,nmbm";
+		#address-cells = <0x01>;
+		#size-cells = <0x01>;
+		lower-mtd-device = <0x1d>;
+		forced-create;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <0x01>;
+			#size-cells = <0x01>;
+
+			partition@0 {
+				label = "BL2";
+				reg = <0x00 0x100000>;
+				read-only;
+			};
+
+			partition@100000 {
+				label = "u-boot-env";
+				reg = <0x100000 0x80000>;
+			};
+
+			partition@180000 {
+				label = "Factory";
+				reg = <0x180000 0x200000>;
+			};
+
+			partition@380000 {
+				label = "FIP";
+				reg = <0x380000 0x200000>;
+			};
+
+			partition@580000 {
+				label = "ubi";
+				reg = <0x580000 0x4000000>;
+			};
+		};
+	};
+
+	gsw@0 {
+		compatible = "mediatek,mt753x";
+		mediatek,ethsys = <0x0d>;
+		#address-cells = <0x01>;
+		#size-cells = <0x00>;
+		mediatek,mdio = <0x1e>;
+		mediatek,portmap = "llllw";
+		mediatek,mdio_master_pinmux = <0x00>;
+		reset-gpios = <0x0c 0x27 0x00>;
+		interrupt-parent = <0x0c>;
+		interrupts = <0x35 0x04>;
+		status = "okay";
+
+		port@5 {
+			compatible = "mediatek,mt753x-port";
+			reg = <0x05>;
+			phy-mode = "rgmii";
+
+			fixed-link {
+				speed = <0x3e8>;
+				full-duplex;
+			};
+		};
+
+		port@6 {
+			compatible = "mediatek,mt753x-port";
+			reg = <0x06>;
+			phy-mode = "sgmii";
+
+			fixed-link {
+				speed = <0x9c4>;
+				full-duplex;
+			};
+		};
+	};
+};
 EOF
+
+        # 注册新设备
+        echo 'define Device/wma301-v2' >> target/linux/mediatek/image/mt798x.mk
+        echo '  DEVICE_VENDOR := Custom' >> target/linux/mediatek/image/mt798x.mk
+        echo '  DEVICE_MODEL := wma301 V2.0' >> target/linux/mediatek/image/mt798x.mk
+        echo '  DEVICE_DTS := wma301-v2' >> target/linux/mediatek/image/mt798x.mk
+        echo '  DEVICE_PACKAGES := kmod-usb-core kmod-usb-ohci kmod-usb2 kmod-usb-ledtrig-usbport block-mount e2fsprogs fdisk usbutils lsblk printenv p910nd samba4-server samba4-client kmod-fs-ntfs ntfs-3g mount.ntfs luci luci-ssl luci-i18n-base-zh-cn odhcp6c odhcpd-ipv6only wpad-basic-wolfssl hostapd-common kmod-ipt-nat6' >> target/linux/mediatek/image/mt798x.mk
+        echo '  KERNEL_SIZE := 16128k' >> target/linux/mediatek/image/mt798x.mk
+        echo '  IMAGE_SIZE := 65536k' >> target/linux/mediatek/image/mt798x.mk
+        echo '  IMAGES += factory.bin sysupgrade.bin' >> target/linux/mediatek/image/mt798x.mk
+        echo '  IMAGE/factory.bin := $(sysupgrade_bin) | check-size $$(IMAGE_SIZE)' >> target/linux/mediatek/image/mt798x.mk
+        echo '  IMAGE/sysupgrade.bin := $(sysupgrade_bin) | check-size $$(IMAGE_SIZE)' >> target/linux/mediatek/image/mt798x.mk
+        echo 'endef' >> target/linux/mediatek/image/mt798x.mk
+        echo 'TARGET_DEVICES += wma301-v2' >> target/linux/mediatek/image/mt798x.mk
 
     - name: Generate .config
       run: |
-        dir="$HOME/openwrt/source"
-        cd "$dir"
-        cat > .config << EOF
-CONFIG_TARGET_${{ env.TARGET }}=y
-CONFIG_TARGET_${{ env.SUBTARGET }}=y
-CONFIG_TARGET_${{ env.SUBTARGET }}_DEVICE_${{ steps.find_dts.outputs.device_name }}=y
-CONFIG_DEVEL=y
-CONFIG_BUILD_LOG=y
-CONFIG_CCACHE=y
+        cd source
+        cat > .config << 'EOF'
+CONFIG_TARGET_mediatek=y
+CONFIG_TARGET_mt798x=y
+CONFIG_TARGET_mt798x_DEVICE_wma301-v2=y
 CONFIG_PACKAGE_luci=y
 CONFIG_PACKAGE_luci-ssl=y
 CONFIG_PACKAGE_luci-theme-bootstrap=y
@@ -122,25 +664,24 @@ CONFIG_PACKAGE_wpad-basic-wolfssl=y
 CONFIG_PACKAGE_iwinfo=y
 CONFIG_PACKAGE_curl=y
 CONFIG_PACKAGE_iperf3=y
-CONFIG_PACKAGE_ping6=y
-CONFIG_PACKAGE_netstat=y
-CONFIG_PACKAGE_tcpdump=y
+CONFIG_DEVEL=y
 EOF
 
     - name: Update Feeds
-      working-directory: $HOME/openwrt/source
+      working-directory: source
       run: |
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
     - name: Start Build
-      working-directory: $HOME/openwrt/source
+      working-directory: source
       run: |
         make defconfig
+        make download -j$(nproc)
         make -j$(nproc)
 
-    - name: Upload Firmware
+    - name: Upload Artifacts
       uses: actions/upload-artifact@v3
       with:
-        path: $HOME/openwrt/source/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*.bin
+        path: source/bin/targets/mediatek/mt798x/*.bin
         if-no-files-found: error
