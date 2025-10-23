@@ -14,12 +14,10 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Setup Source
-      run: |
-        git clone --depth 1 -b openwrt-23.05 https://github.com/immortalwrt/immortalwrt.git firmware
+      run: git clone --depth 1 -b openwrt-23.05 https://github.com/immortalwrt/immortalwrt.git firmware
 
     - name: Create DTS Dir
-      run: |
-        mkdir -p firmware/target/linux/mediatek/files-5.15/arch/arm64/boot/dts/mediatek
+      run: mkdir -p firmware/target/linux/mediatek/files-5.15/arch/arm64/boot/dts/mediatek
 
     - name: Write DTS File
       run: |
@@ -54,22 +52,6 @@ jobs:
 
     memory {
         reg = <0x00 0x40000000 0x00 0x10000000>;
-    };
-
-    &snfi {
-        status = "okay";
-    };
-
-    &spi0 {
-        status = "okay";
-    };
-
-    &ethernet {
-        status = "okay";
-    };
-
-    &xhci {
-        status = "okay";
     };
 };
 EOF
