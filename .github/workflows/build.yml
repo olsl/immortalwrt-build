@@ -3,11 +3,12 @@ name: Build ImmortalWrt for Custom MT798x Device
 on:
   push:
     branches: [ "main", "master" ]
-  workflow_dispatch:
+  workflow_dispatch:  # 允许手动触发
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     env:
       DEVICE_DTS_DIR: dts
       TARGET: mediatek
@@ -24,86 +25,92 @@ jobs:
     - name: Find DTS Files
       id: find_dts
       run: |
+        if [ ! -d "${{ env.DEVICE_DTS_DIR }}" ]; then
+          echo "❌ Directory '/${{ env.DEVICE_DTS_DIR }}' not found!"
+          exit 1
+        fi
+
         DTS_FILES=$(find ${{ env.DEVICE_DTS_DIR }} -name "*.dts" -type f)
         if [ -z "$DTS_FILES" ]; then
           echo "❌ No .dts file found in /${{ env.DEVICE_DTS_DIR }}/"
           exit 1
         fi
-        echo "$DTS_FILES" | while read f; do
-          echo "📄 Found DTS: $(basename $f)"
-        done
+
         FIRST_DTS=$(echo "$DTS_FILES" | head -n1)
         DEVICE_NAME=$(basename "$FIRST_DTS" .dts)
+
         echo "device_name=$DEVICE_NAME" >> $GITHUB_OUTPUT
         echo "device_dts_path=$FIRST_DTS" >> $GITHUB_OUTPUT
         echo "✅ Using device: $DEVICE_NAME"
 
     - name: Setup ImmortalWrt Source
       run: |
-        mkdir -p $GITHUB_WORKSPACE/openwrt
-        cd $GITHUB_WORKSPACE/openwrt
-        git clone --depth 1 -b ${{ env.BRANCH }} ${{ env.REPO_URL }} source
-        cd source
+        mkdir -p $GITHUB_WORKSPACE/openwrt/source
+        cd $GITHUB_WORKSPACE/openwrt/source
+        git clone --depth 1 -b ${{ env.BRANCH }} ${{ env.REPO_URL }} .
+        echo "✅ ImmortalWrt source cloned from branch '${{ env.BRANCH }}'"
 
     - name: Copy User DTS to Target Directory
       run: |
-        DTS_DST="target/linux/mediatek/files-5.15/arch/arm64/boot/dts/mediatek"
-        mkdir -p $GITHUB_WORKSPACE/openwrt/source/$DTS_DST
+        DST_DIR="target/linux/mediatek/files-5.15/arch/arm64/boot/dts/mediatek"
+        mkdir -p $GITHUB_WORKSPACE/openwrt/source/$DST_DIR
         cp ${{ steps.find_dts.outputs.device_dts_path }} \
-           $GITHUB_WORKSPACE/openwrt/source/$DTS_DST/${{ steps.find_dts.outputs.device_name }}.dts
-        echo "✅ Copied DTS to source tree"
+           $GITHUB_WORKSPACE/openwrt/source/$DST_DIR/${{ steps.find_dts.outputs.device_name }}.dts
+
+        echo "✅ Copied DTS file to: $DST_DIR/${{ steps.find_dts.outputs.device_name }}.dts"
 
     - name: Check if Device Already Supported
       id: check_device
       run: |
-        SOURCE_DIR=$GITHUB_WORKSPACE/openwrt/source
+        MK_FILE="$GITHUB_WORKSPACE/openwrt/source/target/linux/mediatek/image/mt798x.mk"
         DEVICE_NAME=${{ steps.find_dts.outputs.device_name }}
-        MK_FILE="$SOURCE_DIR/target/linux/mediatek/image/mt798x.mk"
 
         if grep -q "define Device/$DEVICE_NAME" "$MK_FILE"; then
-          echo "🔍 Device '$DEVICE_NAME' is already supported."
+          echo "🔍 Device '$DEVICE_NAME' is already supported in mt798x.mk"
           echo "already_supported=true" >> $GITHUB_OUTPUT
         else
-          echo "🆕 Device '$DEVICE_NAME' is NOT supported. Will register it."
+          echo "🆕 Device '$DEVICE_NAME' is NOT supported. Registering it..."
           echo "already_supported=false" >> $GITHUB_OUTPUT
         fi
 
     - name: Register New Device (if not exists)
       if: steps.check_device.outputs.already_supported == 'false'
       run: |
-        SOURCE_DIR=$GITHUB_WORKSPACE/openwrt/source
+        MK_FILE="$GITHUB_WORKSPACE/openwrt/source/target/linux/mediatek/image/mt798x.mk"
         DEVICE_NAME=${{ steps.find_dts.outputs.device_name }}
-        MK_FILE="$SOURCE_DIR/target/linux/mediatek/image/mt798x.mk"
 
-        cat >> "$MK_FILE" << EOF
+        {
+          echo ""
+          echo "# Auto-registered by GitHub Actions for $DEVICE_NAME"
+          echo "define Device/$DEVICE_NAME"
+          echo "  DEVICE_VENDOR := Custom"
+          echo "  DEVICE_MODEL := $DEVICE_NAME"
+          echo "  DEVICE_DTS := $DEVICE_NAME"
+          echo "  DEVICE_PACKAGES := \\"
+          echo "    kmod-usb-core kmod-usb-ohci kmod-usb2 kmod-usb-ledtrig-usbport \\"
+          echo "    block-mount e2fsprogs fdisk usbutils lsblk printenv \\"
+          echo "    p910nd samba4-server samba4-client \\"
+          echo "    kmod-fs-ntfs ntfs-3g mount.ntfs \\"
+          echo "    luci luci-ssl luci-i18n-base-zh-cn \\"
+          echo "    odhcp6c odhcpd-ipv6only \\"
+          echo "    wpad-basic-wolfssl hostapd-common \\"
+          echo "    kmod-ipt-nat6"
+          echo "  KERNEL_SIZE := ${{ env.KERNEL_SIZE }}"
+          echo "  IMAGE_SIZE := ${{ env.IMAGE_SIZE }}"
+          echo "  IMAGES += factory.bin sysupgrade.bin"
+          echo "  IMAGE/factory.bin := \$\$(sysupgrade_bin) | check-size \$$$$\$(IMAGE_SIZE)"
+          echo "  IMAGE/sysupgrade.bin := \$\$(sysupgrade_bin) | check-size \$$$$\$(IMAGE_SIZE)"
+          echo "endef"
+          echo "TARGET_DEVICES += $DEVICE_NAME"
+        } >> "$MK_FILE"
 
-# Auto-registered by GitHub Actions for $DEVICE_NAME
-define Device/$DEVICE_NAME
-  DEVICE_VENDOR := Custom
-  DEVICE_MODEL := $DEVICE_NAME
-  DEVICE_DTS := $DEVICE_NAME
-  DEVICE_PACKAGES := \
-    kmod-usb-core kmod-usb-ohci kmod-usb2 kmod-usb-ledtrig-usbport \
-    block-mount e2fsprogs fdisk usbutils lsblk printenv \
-    p910nd samba4-server samba4-client \
-    kmod-fs-ntfs ntfs-3g mount.ntfs \
-    luci luci-ssl luci-i18n-base-zh-cn \
-    odhcp6c odhcpd-ipv6only \
-    wpad-basic-wolfssl hostapd-common \
-    kmod-ipt-nat6
-  KERNEL_SIZE := ${{ env.KERNEL_SIZE }}
-  IMAGE_SIZE := ${{ env.IMAGE_SIZE }}
-  IMAGES += factory.bin sysupgrade.bin
-  IMAGE/factory.bin := \$$(sysupgrade_bin) | check-size \$$\$\$(IMAGE_SIZE)
-  IMAGE/sysupgrade.bin := \$$(sysupgrade_bin) | check-size \$$\$\$(IMAGE_SIZE)
-endef
-TARGET_DEVICES += $DEVICE_NAME
-EOF
         echo "✅ Successfully registered new device: $DEVICE_NAME"
 
     - name: Write .config with Target Configuration
       run: |
-        cd $GITHUB_WORKSPACE/openwrt/source
+        SOURCE_DIR="$GITHUB_WORKSPACE/openwrt/source"
+        cd "$SOURCE_DIR"
+
         cat > .config << EOF
 CONFIG_TARGET_${{ env.TARGET }}=y
 CONFIG_TARGET_${{ env.SUBTARGET }}=y
@@ -128,7 +135,7 @@ CONFIG_PACKAGE_kmod-usb-ledtrig-usbport=y
 CONFIG_PACKAGE_usbutils=y
 CONFIG_PACKAGE_lsusb=y
 
-# USB Printer
+# USB Printer Support
 CONFIG_PACKAGE_kmod-usb-printer=y
 CONFIG_PACKAGE_p910nd=y
 
@@ -164,32 +171,38 @@ CONFIG_PACKAGE_ping6=y
 # Debug
 CONFIG_PACKAGE_netstat=y
 CONFIG_PACKAGE_tcpdump=y
+
+# End of config
 EOF
-        echo "✅ .config generated for device: ${{ steps.find_dts.outputs.device_name }}"
+
+        echo "✅ .config generated for device '${{ steps.find_dts.outputs.device_name }}'"
 
     - name: Update Feeds
       working-directory: $GITHUB_WORKSPACE/openwrt/source
       run: |
         ./scripts/feeds update -a
         ./scripts/feeds install -a
+        echo "✅ Feeds updated and packages installed"
 
     - name: Start Compilation
       working-directory: $GITHUB_WORKSPACE/openwrt/source
       run: |
         make defconfig
         echo "🚀 Starting firmware compilation..."
-        make -j$(nproc) V=s || { echo "❌ Build failed!"; exit 1; }
+        make -j$(nproc) || { echo "❌ Build failed!"; exit 1; }
 
     - name: Find Firmware Output
       id: find_firmware
       run: |
-        BUILD_DIR=$GITHUB_WORKSPACE/openwrt/source/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}
+        BUILD_DIR="$GITHUB_WORKSPACE/openwrt/source/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}"
         FIRMWARE_FILES=$(find "$BUILD_DIR" -name "*${{ steps.find_dts.outputs.device_name }}*.bin" -type f 2>/dev/null || true)
+
         if [ -z "$FIRMWARE_FILES" ]; then
           echo "❌ No firmware file generated!"
           ls -la "$BUILD_DIR" || true
           exit 1
         fi
+
         echo "firmware_dir=$(dirname $FIRMWARE_FILES)" >> $GITHUB_OUTPUT
         echo "📄 Firmware built successfully:"
         echo "$FIRMWARE_FILES" | xargs ls -lh
@@ -217,9 +230,9 @@ EOF
 - 💾 SPI NAND 分区管理
 - ⚙️ NTFS/exFAT/U盘自动挂载
 
-编译时间：$(date '+%Y-%m-%d %H:%M')
-源码分支：${{ env.BRANCH }}
-设备型号：${{ steps.find_dts.outputs.device_name }}
+📅 编译时间：$(date '+%Y-%m-%d %H:%M')
+🔧 源码分支：${{ env.BRANCH }}
+📡 设备型号：${{ steps.find_dts.outputs.device_name }}
 
 💡 使用方法：
 1. 通过 U-Boot 或现有 OpenWrt 刷入 \`sysupgrade.bin\`
@@ -229,5 +242,5 @@ EOF
           --title "$RELEASE_NAME" \
           --notes "$BODY" \
           --draft=false \
-          --delete-tag \
-          ${{ steps.find_firmware.outputs.firmware_dir }}/*.bin || echo "⚠️ Failed to create release (maybe already exists)"
+          --prerelease=false \
+          ${{ steps.find_firmware.outputs.firmware_dir }}/*.bin || echo "⚠️ Failed to create release (maybe tag already exists)"
