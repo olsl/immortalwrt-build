@@ -11,7 +11,9 @@ jobs:
       PROFILE: WMA301_AX3000
     steps:
     - name: 🧹 清理空间
-      run: sudo rm -rf /usr/share/dotnet /opt/ghc && docker image prune -af || true
+      run: |
+        sudo rm -rf /usr/share/dotnet /opt/ghc && docker image prune -af || true
+        rm -rf source/ temp-dts/ || true  # 彻底清理旧目录
 
     - name: 📦 从 Base64 还原 DTS 文件
       run: |
@@ -384,6 +386,9 @@ jobs:
         ZnVsbC1kdXBsZXg7CgkJCX07CgkJfTsKCX07Cn07Cg==
         EOF
         echo "✅ 成功写入: $DTS_DIR/mt7981b-wma301-ax3000-v2.dts"
+
+    - name: 🧹 清理旧源码（防止克隆失败）
+      run: rm -rf source/ || true
 
     - name: 📥 克隆 ImmortalWrt 源码
       run: |
