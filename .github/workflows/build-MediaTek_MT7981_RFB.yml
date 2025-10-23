@@ -50,11 +50,12 @@ jobs:
         mkdir -p target/linux/${TARGET}/dts
         cp ../dts/${DTS_FILENAME} target/linux/${TARGET}/dts/
         
-    # 修复Filogic架构设备注册
-IMAGE_MAKEFILE="target/linux/mediatek/filogic/image/Makefile"
-if [ -f "$IMAGE_MAKEFILE" ]; then
-  if ! grep -q "Device/AX3000_V2" "$IMAGE_MAKEFILE"; then
-    cat >> "$IMAGE_MAKEFILE" << EOF
+- name: 🔧 注册 Filogic 设备
+  run: |
+    IMAGE_MAKEFILE="target/linux/mediatek/filogic/image/Makefile"
+    if [ -f "$IMAGE_MAKEFILE" ]; then
+      if ! grep -q "Device/AX3000_V2" "$IMAGE_MAKEFILE"; then
+        cat >> "$IMAGE_MAKEFILE" << EOF
 define Device/AX3000_V2
   $(Device/filogic)
   DEVICE_VENDOR := Custom
@@ -65,8 +66,8 @@ define Device/AX3000_V2
 endef
 TARGET_DEVICES += AX3000_V2
 EOF
-  fi
-fi
+      fi
+    fi
     
     - name: 🎛️ 配置编译选项
       run: |
