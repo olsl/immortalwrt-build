@@ -48,7 +48,7 @@ jobs:
         MAKEFILE="$DIR/Makefile"
         mkdir -p "$DIR"
         if [ ! -f "$MAKEFILE" ]; then
-          echo "Creating $MAKEFILE"
+          echo "📁 创建 $MAKEFILE"
           echo "include \$(INCLUDE_DIR)/image.mk" > "$MAKEFILE"
         fi
         if ! grep -q "define Device/WMA301_AX3000" "$MAKEFILE"; then
