@@ -1,430 +1,233 @@
-name: 编译 ImmortalWrt 固件
-on:
-  workflow_dispatch:  # 手动触发
+name: Build ImmortalWrt for Custom MT798x Device
 
-env:
-  TARGET: mediatek
-  SUBTARGET: filogic
-  DTS_FILE: mt7981b-wma301-ax3000-v2.dts
-  PROFILE_NAME: WMA301_AX3000
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+    runs-on: ubuntu-22.04
+    env:
+      DEVICE_DTS_DIR: dts
+      TARGET: mediatek
+      SUBTARGET: mt798x
+      IMAGE_SIZE: 65536k
+      KERNEL_SIZE: 16128k
+      REPO_URL: https://github.com/immortalwrt/immortalwrt.git
+      BRANCH: openwrt-23.05
 
     steps:
-    - name: Set Build Timestamp
-      run: echo "BUILD_TIME=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-    - name: 🧹 清理工作区
+    - name: Find DTS Files
+      id: find_dts
       run: |
-        sudo rm -rf /usr/share/dotnet /opt/ghc && docker image prune -af || true
-        rm -rf dts/ source/
+        DTS_FILES=$(find ${{ env.DEVICE_DTS_DIR }} -name "*.dts" -type f)
+        if [ -z "$DTS_FILES" ]; then
+          echo "❌ No .dts file found in /${{ env.DEVICE_DTS_DIR }}/"
+          exit 1
+        fi
+        echo "$DTS_FILES" | while read f; do
+          echo "📄 Found DTS: $(basename $f)"
+        done
+        FIRST_DTS=$(echo "$DTS_FILES" | head -n1)
+        DEVICE_NAME=$(basename "$FIRST_DTS" .dts)
+        echo "device_name=$DEVICE_NAME" >> $GITHUB_OUTPUT
+        echo "device_dts_path=$FIRST_DTS" >> $GITHUB_OUTPUT
+        echo "✅ Using device: $DEVICE_NAME"
 
-    - name: 📦 从 Base64 还原 DTS 文件
+    - name: Setup ImmortalWrt Source
       run: |
-        echo "🔧 正在重建 DTS 文件..."
-        mkdir -p dts
-        cat << 'EOF' | base64 -d > "dts/mt7981b-wma301-ax3000-v2.dts"
-        L2R0cy12MS87CgovIHsKCWNvbXBhdGlibGUgPSAibWVkaWF0ZWssbXQ3OTgxLXNwaW0tc25hbmQt
-        cmZiIjsKCWludGVycnVwdC1wYXJlbnQgPSA8MHgwMT47CgkjYWRkcmVzc2NlbGxzID0gPDB4MDI+
-        OwoJI3NpemVjZWxscyA9IDwweDAyPjsKCW1vZGVsID0gIk1lZGlhVGVrIE1UNzk4MSBSRkIiOwoK
-        CWNwdXMgewoJI2FkZHJlc3NjZWxscyA9IDwweDAxPjsKI3NpemVjZWxscyA9IDwweDAwPjsKCglj
-        cHVAMCB7CgkJZGV2aWNldHlwZSA9ICJjcHUiOwoJCWNvbXBhdGlibGUgPSAiYXJtLGNvcnRleC1h
-        NTMiOwoJCWVuYWJsZW1ldGhvZCA9ICJwc2NpIjsKCQlyZWcgPSA8MHgwMD47Cgl9OwoKCWNwdUAx
-        IHsKCQlkZXZpY2VfdHlwZSA9ICJjcHUiOwoJCWNvbXBhdGlibGUgPSAiYXJtLGNvcnRleC1hNTMi
-        OwoJCWVuYWJsZW1ldGhvZCA9ICJwc2NpIjsKCQlyZWcgPSA8MHgwMT47Cgl9Owp9OwoKcHdtQDEw
-        MDQ4MDAwIHsKCWNvbXBhdGlibGUgPSAibWVkaWF0ZWssbXQ3OTgxLXB3bSI7CglyZWcgPSA8MHgw
-        MCAweDEwMDQ4MDAwIDB4MDAgMHgxMDAwPjsKI3B3bWNlbGxzID0gPDB4MDI+OwoJY2xvY2tzID0g
-        PDB4MDIgMHgwZCAweDAyIDB4MGMgMHgwMiAweDBlIDB4MDIgMHgwZiAweDAyIDB4MTA+OwoJY2xv
-        Y2tubmFtZXMgPSAidG9wXDBtYWluXDBwd20xXDBwd20yIjsKfTsKCnRoZXJtYWx6b25lcyB7Cgpj
-        cHVfdGhlcm1hbCB7Cglwb2xsaW5nZGVsYXlwYXNzaXZlID0gPDB4M2U4PjsKCVBvbGxpbmdkZWxh
-        eSA9IDwweDNlOD47Cgl0aGVybWFsc2Vuc29ycyA9IDwweDAzIDB4MDA+Owp9Owp9OwoKdGhlcm1h
-        bEAxMTAwYzgwMCB7CiAjKHRoZXJtYWxzZW5zb3JjZWxscyA9IDwweDAxPikKCWNvbXBhdGlibGUg
-        PSAibWVkaWF0ZWssbXQ3OTgxLXRoZXJtYWwiOwoJcmVnID0gPDB4MDAgMHgxMTAwYzgwMCAweDAw
-        IDB4ODAwPjsKCWludGVycnVwdHMgPSA8MHgwMCAweDhhIDB4MDQ+OwoJY2xvY2tzID0gPDB4MDIg
-        MHgxYyAweDAyIDB4MmYgMHgwMiAweDMwPjsKCWNsb2NrbmFtZXMgPSAidGhlcm1cMGF1eGFkY1ww
-        YWRjXzMyayI7CgltZWRpYXRlayxhdXhhZGMgPSA8MHgwND47CgltZWRpYXRlayxhcG1peGVkc3lz
-        ID0gPDB4MDU+OwoJbnZtZW1jZWxscyA9IDwweDA2PjsKCW52bWVtY2VsbG5hbWVzID0gImNhbGli
-        cmF0aW9uZGF0YSI7CglwaGFuaGRsZSA9IDwweDAzPjsKfTsKCmFkY0AxMTAwZDAwMCB7Cgljb21w
-        YXRpYmxlID0gIm1lZGlhdGVrLG10Nzk4MS1hdXhhZGNcMG1lZGlhdGVrLG10NzYyMi1hdXhhZGMi
-        OwoJcmVnID0gPDB4MDAgMHgxMTAwZDAwMCAweDAwIDB4MTAwMD47CgljbG9ja3MgPSA8MHgwMiAw
-        eDJmIDB4MDIgMHgzMD47CgljbG9ja25hbWVzID0gIm1haW5cMDMyayI7CiAjaW9jaGFubmVsY2Vs
-        bHMgPSA8MHgwMT47CglwaGFuaGRsZSA9IDwweDA0PjsKfTsKCndlZEAxNTAxMDAwMCB7Cgljb21w
-        YXRpYmxlID0gIm1lZGlhdGVrLHdlZCI7Cgl3ZWRfbnVtID0gPDB4MDI+OwoJcGNpX3Nsb3RfbWFw
-        ID0gPDB4MDAgMHgwMT47CglyZWcgPSA8MHgwMCAweDE1MDEwMDAwIDB4MDAgMHgxMDAwIDB4MDAg
-        MHgxNTAxMTAwMCAweDAwIDB4MTAwMD47CglpbnRlcnJ1cHRwYXJlbnQgPSA8MHgwMT47CglpbnRl
-        cnJ1cHRzID0gPDB4MDAgMHhjZCAweDA0IDB4MDAgMHhjZSAweDA0PjsKCWR5X3R4Ym1fZW5hYmxl
-        ID0gInRydWUiOwoJZHlfdHhibV9idWRnZXQgPSA8MHgwOD47Cgl0eGJtX2luaXRfc3ogPSA8MHgw
-        OD47Cgl0eGJtX21heF9zeiA9IDwweDIwPjsKCXN0YXR1cyA9ICJva2F5IjsKfTsKCndkbWFAMTUx
-        MDQ4MDAgewoJY29tcGF0aWJsZSA9ICJtZWRpYXRlayx3ZWQtd2RtYSI7CglyZWcgPSA8MHgwMCAw
-        eDE1MTA0ODAwIDB4MDAgMHg0MDAgMHgwMCAweDE1MTA0YzAwIDB4MDAgMHg0MDA+Owp9OwoKYXAy
-        d29jY2lmQDE1MUE1MDAwIHsKCWNvbXBhdGlibGUgPSAibWVkaWF0ZWssYXAyd29jY2lmIjsKCXJl
-        ZyA9IDwweDAwIDB4MTUxYTUwMDAgMHgwMCAweDEwMDAgMHgwMCAweDE1MWFkMDAwIDB4MDAgMHgx
-        MDAwPjsKCWludGVycnVwdC1wYXJlbnQgPSA8MHgwMT47CglpbnRlcnJ1cHRzID0gPDB4MDAgMHhk
-        MyAweDA0IDB4MDAgMHhkNCAweDA0PjsKfTsKCXdvY3B1MF9pbG1AMTUxRTAwMDAgewoJY29tcGF0
-        aWJsZSA9ICJtZWRpYXRlayx3b2NwdTBfaWxtIjsKCXJlZyA9IDwweDAwIDB4MTUxZTAwMDAgMHgw
-        MCAweDg4MDAwPjsKfTsKCXdvY3B1X2RsbUAxNTFFODAwMCB7Cgljb21wYXRpYmxlID0gIm1lZGlh
-        dGVrLHdvY3B1X2RsbSI7CglyZWcgPSA8MHgwMCAweDE1MWU4MDAwIDB4MDAgMHgyMDAwIDB4MDAg
-        MHgxNTFmODAwMCAweDAwIDB4MjAwMD47CglyZXNldHMgPSA8MHgwNyAweDAwPjsKCXJlc2V0bmFt
-        ZXMgPSAid29jcHVfcnN0IjsKfTsKCndvY3B1X2Jvb3RAE1E5NDAwMCB7Cgljb21wYXRpYmxlID0g
-        Im1lZGlhdGVrLHdvY3B1X2Jvb3QiOwoJcmVnID0gPDB4MDAgMHgxNTE5NDAwMCAweDAwIDB4MTAw
-        MD47Cn07CgpyZXNlcnZlZG1lbW9yeSB7CiAjYWRkcmVzc2NlbGxzID0gPDB4MDI+OwoJI3NpemVj
-        ZWxscyA9IDwweDAyPjsKCXJhbmdlczsKCnNlY21vbkA0MzAwMDAwMCB7CglyZWcgPSA8MHgwMCAw
-        eDQzMDAwMDAwIDB4MDAgMHgzMDAwMD47Cglub21hcDsKfTsKCndtY3B1cmVzZXJ2ZWRAE1M4MDAw
-        MCB7Cgljb21wYXRpYmxlID0gIm1lZGlhdGVrLHdtY3B1cmVzZXJ2ZWQiOwoJbm9tYXA7CglyZWcg
-        PSA8MHgwMCAweDQ3YzgwMDAwIDB4MDAgMHgxMDAwMDA+OwoJcGhhbmRsZSA9IDwweDE2PjsKfTsK
-CndvY3B1MF9lbWlANDdEOFAwMDAgeyAKCWlubmVyIG1lbW9yeSBmb3Igd29jcHUgcHJvZ3JhbXMgYW5k
-IGRhdGEKICBjb21wYXRpYmxlID0gIm1lZGlhdGVrLHdvY3B1MF9lbWkiOwoJbm9tYXA7CglyZWcgPSA8
-        MHgwMCAweDQ3ZDgwMDAwIDB4MDAgMHg0MDAwMD47CglzaGFyZWQgPSA8MHgwMD47Cn07Cgp3b2Nw
-        dV9kYXRhQDQ3REMwMDAwIHsKCWNvbXBhdGlibGUgPSAibWVkaWF0ZWssd29jcHVfZGF0YSI7Cglu
-        b21hcDsKCXJlZyA9IDwweDAwIDB4NDdkYzAwMDAgMHgwMCAweDI0MDAwMD47CglzaGFyZWQgPSA8
-        MHgwMT47Cn07Cn07Cgpwc2NpIHsKCWNvbXBhdGlibGUgPSAiYXJtLHBzaWktMC4yIjsKCW1ldGhv
-        ZCA9ICJzbWMiOwp9OwoKb3NjaWxsYXRvcjAgewoJY29tcGF0aWJsZSA9ICJmaXhlZGNsb2NrIjsK
-        CSNjbG9ja2NlbGxzID0gPDB4MDA+OwoJY2xvY2tmcnVxdWVuY3kgPSA8MHgyNjI1YTAwPjsKCWNs
-        b2Nrb3V0cHV0bmFtZXMgPSAiY2treHRhbCI7CglwaGFuaGRsZSA9IDwweDFjPjsKfTsKCmluZnJh
-        Y2ZnX2FvQDEwMDAxMTAwIHsKCWNvbXBhdGlibGUgPSAibWVkaWF0ZWssbXQ3OTgxLWluZnJhY2Zn
-        X2FvXHN5c2NvbiI7CglyZWcgPSA8MHgwMCAweDEwMDAxMTAwIDB4MDAgMHg2OD47CiAjY2xvY2tj
-        ZWxscyA9IDwweDAxPjsKCXBoYW5kbGUgPSA8MHgwMj47Cn07CgpJbmZyYWNmZ0AxMDAwMTA0MCB7
-        Cgljb21wYXRpYmxlID0gIm1lZGlhdGVrLG10Nzk4MS1pbmZyYWNmZ1wvc3lzY29uIjsKCXJlZyA9
-        IDwweDAwIDB4MTAwMDEwNjggMHgwMCAweDEwMDA+OwoJI2Nsb2NrY2VsbHMgPSA8MHgwMT47Cglw
-        aGFuaGRsZSA9IDwweDA5PjsKfTsKCnRvcGNrZ2VuQDEwMDFCMDAwIHsKCWNvbXBhdGlibGUgPSAi
-        bWVkaWF0ZWssbXQ3OTgxLXRvcGNrZ2VuXHN5c2NvbiI7CglyZWcgPSA8MHgwMCAweDEwMDFiMDAw
-        IDB4MDAgMHgxMDAwPjsKI2Nsb2NrY2VsbHMgPSA8MHgwMT47CglwaGFuaGRsZSA9IDwweDA4PjsK
-        fTsKCmFwbWl4ZWRzeXNAMTAwMUUwMDAgewoJY29tcGF0aWJsZSA9ICJtZWRpYXRlayxtdDc5ODEt
-        YXBtaXhlZHN5c1wvc3lzY29uIjsKCXJlZyA9IDwweDAwIDB4MTAwMWUwMDAgMHgwMCAweDEwMDA+
-        OwojY2xvY2tjZWxscyA9IDwweDAxPjsKCXBoYW5kbGUgPSA8MHgwNT47Cn07CgpkdW1teV9zeXN0
-        ZW1fY2xrIHsKCWNvbXBhdGlibGUgPSAiZml4ZWRjbG9jayI7CgljbG9ja2ZyZXF1ZW5jeSA9IDw0
-        MTcxMjgwMD47CiAjY2xvY2tjZWxscyA9IDwweDAwPjsKCXBoYW5kbGUgPSA8MHgxOD47Cn07CgpE
-        dW1teV9ncHRfY2xrIHsKCWNvbXBhdGlibGUgPSAiZml4ZWRjbG9jayI7CgljbG9ja2ZyZXF1ZW5j
-        eSA9IDwweDEzMTJkMDA+OwojY2xvY2tjZWxscyA9IDwweDAwPjsKfTsKCnRpbWVyIHsKCWNvbXBh
-        dGlibGUgPSAiYXJtLCBhcm12OC10aW1lciI7CglpbnRlcnJ1cHRwYXJlbnQgPSA8MHgwMT47Cglj
-        bG9ja2ZyZXF1ZW5jeSA9IDwweGM2NWQ0MD47CglpbnRlcnJ1cHRzID0gPDB4MDEgMHgwZCAweDA4
-        IDB4MDEgMHgwZSAweDA4IDB4MDEgMHgwYiAweDA4IDB4MDEgMHgwYSAweDA4PjsKfTsKCndhdGNo
-        ZG9nQDEwMDFjMDAwIHsKCWNvbXBhdGlibGUgPSAibWVkaWF0ZWssbXQ3NjIyLXdkdFxtZWRpYXRl
-        ayxtdDY1ODktd2R0IjsKCXJlZyA9IDwweDAwIDB4MTAwMWMwMDAgMHgwMCAweDEwMDA+OwoJaW50
-        ZXJydXB0cyA9IDwweDAwIDB4NmUgMHgwND47CiAjcmVzZXRjZWxscyA9IDwweDAxPjsKCXN0YXR1
-        cyA9ICJva2F5IjsKfTsKCmludGVycnVwdGNvbnRyb2xsZXJAYzAwMDAwMCB7Cgljb21wYXRpYmxl
-        ID0gImFybSxnZWMtdiMiOwoJI2ludGVycnVwdGNlbGxzID0gPDB4MDM+OwoJaW50ZXJydXB0cGFy
-        ZW50ID0gPDB4MDE+OwoJaW50ZXJydXB0Y29udHJvbGxlcjsKCXJlZyA9IDwweDAwIDB4YzAwMDAw
-        MCAweDAwIDB4NDAwMDAgMHgwMCAweGMwODAwMDAgMHgwMCAweDIwMDAwMD47CglpbnRlcnJ1cHRz
-        ID0gPDB4MDEgMHgwOSAweDA0PjsKCXBoYW5kbGUgPSA8MHgwMT47Cn07Cgp0cm5nQDEwMjBmMDAw
-        IHsKCWNvbXBhdGlibGUgPSAibWVkaWF0ZWssbXQ3OTgxLXJuZyI7Cn07CgpzZXJpYWxAExAwMjAw
-        MCB7Cgljb21wYXRpYmxlID0gIm1lZGlhdGVrLG10NjU3Ny11YXJ0IjsKCXJlZyA9IDwweDAwIDB4
-        MTEwMDIwMDAgMHgwMCAweDQwMD47CglpbnRlcnJ1cHRzID0gPDB4MDAgMHg3YiAweDA0PjsKCWNs
-        b2NrcyA9IDwweDAyIDB4MWU+OwoJYXNzaWduZWRjbG9ja3MgPSA8MHgwOCAweDUwIDB4MDIgMHgw
-        MD47Cglhc3NpZ25lZGNsb2NrcGFyZW50cyA9IDwweDA4IDB4MDAgMHgwOSAweDAxPjsKCXN0YXR1
-        cyA9ICJva2F5IjsKfTsKCnNlcmlhbEAxMTAwMzAwMCB7Cgljb21wYXRpYmxlID0gIm1lZGlhdGVr
-        LG10NjU3Ny11YXJ0IjsKCXJlZyA9IDwweDAwIDB4MTEwMDMwMDAgMHgwMCAweDQwMD47CglpbnRl
-        cnJ1cHRzID0gPDB4MDAgMHg3YyAweDA0PjsKCWNsb2NrcyA9IDwweDAyIDB4MWY+OwoJYXNzaWdu
-        ZWRjbG9ja3MgPSA8MHgwOCAweDUwIDB4MDIgMHgwMT47Cglhc3NpZ25lZGNsb2NrcGFyZW50cyA9
-        IDwweDA4IDB4MDAgMHgwOSAweDAxPjsKCXN0YXR1cyA9ICJkaXNhYmxlZCI7Cn07CgpzZXJpYWxA
-        MTEwMDQwMDAgeyAKCWlubmVyIFVBUlQgZm9yIGNvbnNvbGUgb3V0cHV0Cgljb21wYXRpYmxlID0g
-        Im1lZGlhdGVrLG10NjU3Ny11YXJ0IjsKCXJlZyA9IDwweDAwIDB4MTEwMDQwMDAgMHgwMCAweDQw
-        MD47CglpbnRlcnJ1cHRzID0gPDB4MDAgMHg3ZCAweDA0PjsKCWNsb2NrcyA9IDwweDAyIDB4MjA+
-        OwoJYXNzaWduZWRjbG9ja3MgPSA8MHgwOCAweDUwIDB4MDIgMHgwMj47Cglhc3NpZ25lZGNsb2Nr
-        cGFyZW50cyA9IDwweDA4IDB4MDAgMHgwOSAweDAxPjsKCXN0YXR1cyA9ICJkaXNhYmxlZCI7Cn07
-        CgpJMmNAMTEwMDcwMDAgeyAKCWlubmVyIEkyQyBjb250cm9sbGVyCgljb21wYXRpYmxlID0gIm1l
-        ZGlhdGVrLG10Nzk4MS1pMmMiOwoJcmVnID0gPDB4MDAgMHgxMTAwNzAwMCAweDAwIDB4MTAwMCAw
-        eDAwIDB4MTAyMTcwODAgMHgwMCAweDgwPjsKCWludGVycnVwdHMgPSA8MHgwMCAweDg4IDB4MDQ+
-        OwoJY2xvY2tkaXYgPSA8MHgwMT47CgljbG9ja3MgPSA8MHgwMiAweDFkIDB4MDIgMHgxOT47Cglj
-        bG9ja25hbWVzID0gIm1haW5cMGRtYSI7CiAjYWRkcmVzc2NlbGxzID0gPDB4MDE+OwoJI3NpemVj
-        ZWxscyA9IDwweDAwPjsKCXN0YXR1cyA9ICJkaXNhYmxlZCI7Cn07CgpwY2llQDExMjgwMDAwIHsK
-        CWNvbXBhdGlibGUgPSAibWVkaWF0ZWssbXQ3OTgxLXBjaWVcbWVkaWF0ZWssbXQ3OTg2LXBjaWUi
-        OwoJZGV2aWNldHlwZSA9ICJwY2kiOwoJcmVnID0gPDB4MDAgMHgxMTI4MDAwMCAweDAwIDB4NDAw
-        MD47CglyZWdubmFtZXMgPSAicGNpZW1hYyI7CiAjYWRkcmVzc2NlbGxzID0gPDB4MDM+OwoJI3Np
-        emVjZWxscyA9IDwweDAyPjsKCWludGVycnVwdHMgPSA8MHgwMCAweGE4IDB4MDQ+OwoJYnVzcmFu
-        Z2UgPSA8MHgwMCAweGZmPjsKCXJhbmdlcyA9IDwweDgyMDAwMDAwIDB4MDAgMHgyMDAwMDAwMCAw
-        eDAwIDB4MjAwMDAwMDAwIDB4MDAgMHgxMDAwMDAwMD47CglzdGF0dXMgPSAiZGlzYWJsZWQiOwoJ
-        Y2xvY2tzID0gPDB4MDIgMHgzOCAweDAyIDB4MzkgMHgwMiAweDNhIDB4MDIgMHgzYj47CglwaHlz
-        ID0gPDB4MGEgMHgwMj47CglwaHlnbmFtZXMgPSAicGNpZXBoeSI7CiAjaW50ZXJydXB0Y2VsbHMg
-        PSA8MHgwMT47CglpbnRlcnJ1cHRtYXAgbWFzayA9IDwweDAwIDB4MDAgMHgwMCAweDA3PjsKCWlu
-        dGVycnVwdG1hcCA9IDwweDAwIDB4MDAgMHgwMCAweDAxIDB4MGIgMHgwMCAweDAwIDB4MDAgMHgw
-        MCAweDAyIDB4MGIgMHgwMSAweDAwIDB4MDAgMHgwMCAweDAzIDB4MGIgMHgwMj47CgoJaW50ZXJy
-        dXB0Y29udHJvbGxlciB7CglpbnRlcnJ1cHRjb250cm9sbGVyOwoJI2FkZHJlc3NjZWxscyA9IDw0
-        eDAwPjsKI2ludGVycnVwdGNlbGxzID0gPDB4MDE+OwoJcGhhbmRsZSA9IDwweDBiPjsKfTsKfTsK
-        CmNyeXB0b0AxMDMyMDAwMCB7Cgljb21wYXRpYmxlID0gImluc2lkZXNlY3VyZSxzYWZleGNlbC1l
-        aXA5NyI7CglyZWcgPSA8MHgwMCAweDEwMzIwMDAwIDB4MDAgMHg0MDAwMD47CglpbnRlcnJ1cHRz
-        ID0gPDB4MDAgMHg3NCAweDA0IDB4MDAgMHg3NSAweDA0IDB4MDAgMHg3NiAweDA0IDB4MDAgMHg3
-        NyAweDA0PjsKCWludGVycnVwdG5hbWVzID0gInJpbmcwXHxyaW5nMVx8cmluZzJcfHJpbmczIjsK
-        CWNsb2NrcyA9IDwweDA4IDB4NDI+OwoJY2xvY2tubmFtZXMgPSAidG9wX2VpcDk3X2NrIjsKCWFz
-        c2lnbmVkY2xvY2tzID0gPDB4MDggMHg2Mz47Cglhc3NpZ25lZGNsb2NrcGFyZW50cyA9IDwweDA4
-        IDB4MTU+Owp9OwoKcGluY3RybEAxMWQwMDAwMCB7Cgljb21wYXRpYmxlID0gIm1lZGlhdGVrLG10
-        Nzk4MS1waW5jdHJsIjsKCXJlZyA9IDwweDAwIDB4MTFkMDAwMDAgMHgwMCAweDEwMDAgMHgwMCAw
-        eDExYzAwMDAwIDB4MDAgMHgxMDAwIDB4MDAgMHgxMWMxMDAwMCAweDAwIDB4MTAwMCAweDAwIDB4
-        MTFkMjAwMDAgMHgwMCAweDEwMDAgMHgwMCAweDExZTAwMDAwIDB4MDAgMHgxMDAwIDB4MDAgMHgx
-        MWUyMDAwMCAweDAwIDB4MTAwMCAweDAwIDB4MTFmMDAwMDAgMHgwMCAweDEwMDAgMHgwMCAweDEx
-        ZjEwMDAwIDB4MDAgMHgxMDAwIDB4MDAgMHgxMDAwYjAwMCAweDAwIDB4MTAwMD47CglyZWdubmFt
-        ZXMgPSAiZ3Bpb2Jhc2VcMGlvY2ZncnRiYXNlXDBpb2Nmc3JtYmFzZVwwaW9jZnNyYmJhc2VcMGlv
-        Y2ZnbGJiYXNlXDBpb2Nmg2JsYmFzZVwwaW9jZnN0YmJhc2VcMGlvY2ZzdGxiYmFzZVwwZWludCI7
-        Cgln cGlvY29udHJvbGxlciAKCSNncGlvY2VsbHMgPSA8MHgwMj47Cgln cGlvcmFuZ2VzID0gPDB4
-        MGMgMHgwMCAweDAwIDB4Mzg+OwoJaW50ZXJydXB0Y29udHJvbGxlcjsKCWludGVycnVwdHMgPSA8
-        MHgwMCAweGUxIDB4MDQ+OwoJaW50ZXJydXB0cGFyZW50ID0gPDB4MDE+OwojImludGVycnVwdGNl
-        bGxzIiA9IDwweDAyPjsKCXBoYW5kbGUgPSA8MHgwYz47CgppMmNwaW5zZzAgeyAKCW11eCB7IAoJ
-        CWZ1bmN0aW9uID0gIjkwIjsKCQln cmdvdXBzID0gImkyYzBfMCI7Cgl9Owp9OwoKcGNtcGluc2cw
-        IHsKCW11eCB7IAoJCWZ1bmN0aW9uID0gInBjbSI7CgkJZ3JvdXBzID0gInBjbSI7Cgl9Owp9OwoK
-        cHdtMHBpbmdnMCB7CgltdeKKgnsgCgkJZnVuY3Rpb24gPSAicHdtIjsKCQln cmdvdXBzID0gInB3
-        bTBfMCI7Cgl9Owp9OwoKcHdtMXBpbmdnMCB7CgltdeKKgnsgCgkJZnVuY3Rpb24gPSAicHdmIjsK
-        CQln cmdvdXBzID0gInB3bTFfMCI7Cgl9Owp9OwoKcHdtMnBpbnsKCW11eCB7IAoJCWZ1bmN0aW9u
-        ID0gInB3bSI7CgkJZ3JvdXBzID0gInB3bTIiOwp9Owp9OwoKc3BpMHByaW5zIHsKCXBoYW5kbGUg
-        PSA8MHgxND47CgptdeKKgnsgCgkJZnVuY3Rpb24gPSAic3BpIjsKCQln cmdvdXBzID0gInNwaTBc
-        MHNwaTBfd3BfaG9sZCI7Cn07Cn07CgpzcGkxcHJpbnMgewoJcGhhbmRsZSA9IDwweDE1PjsKCm11
-        eCB7IAoJCWZ1bmN0aW9uID0gInNwaSI7CgkJZ3JvdXBzID0gInNwaTFfMSI7Cn07Cn07Cgp1YXJ0
-        MXBpbnNsZzEgewoJbXV4IHsgCgkJZnVuY3Rpb24gPSAidWFydCI7CgkJZ3JvdXBzID0gInVhcnQx
-        XzEiOwp9Owp9OwoKdWFydDJwaW5zbGcxIHsKCW11eCB7IAoJCWZ1bmN0aW9uID0gInVhcnQiOwoJ
-        CWdncm91cHMgPSAidWFydDJfMSI7Cn07Cn07Cn07CgpzeXNjb25AMTUwMDAwMDAgeyAKI2FkZHJl
-        c3NjZWxscyA9IDwweDAxPjsKI3NpemVjZWxscyA9IDwweDAxPjsKCWNvbXBhdGlibGUgPSAibWVk
-        aWF0ZWssbXQ3OTgxLWV0aHN5c1wvc3lzY29uIjsKCXJlZyA9IDwweDAwIDB4MTUwMDAwMDAgMHgw
-        MCAweDEwMDA+OwojY2xvY2tjZWxscyA9IDwweDAxPjsKI3Jlc2V0Y2VsbHMgPSA8MHgwMT47Cglw
-        aGFuaGRsZSA9IDwweDBkPjsKCnJlc2V0Y29udHJvbGxlcnsKCWNvbXBhdGlibGUgPSAidGksc3lz
-        Y29uLXJlc2V0IjsKI3Jlc2V0Y2VsbHMgPSA8MHgwMT47Cgl0aSxyZXNldGJpdHMgPSA8MHgzNCAw
-        eDA0IDB4MzQgMHgwNCAweDM0IDB4MDQgMHgyOD47CglwaGFuaGRsZSA9IDwweDA3PjsKfTsKfTsK
-        CmV0aGVybmV0QDE1MTAwMDAwIHsKCWNvbXBhdGlibGUgPSAibWVkaWF0ZWssbXQ3OTgxLWV0aCI7
-        CglyZWcgPSA8MHgwMCAweDE1MTAwMDAwIDB4MDAgMHg4MDAwMD47CglpbnRlcnJ1cHRzID0gPDB4
-        MDAgMHhjNCAweDA0IDB4MDAgMHhjNSAweDA0IDB4MDAgMHhjNiAweDA0IDB4MDAgMHhjNyAweDA0
-        PjsKCWNsb2NrcyA9IDwweDBkIDB4MDAgMHgwZCAweDAxIDB4MGQgMHgyIDIweDBkIDB4MDMgMHgw
-        ZSAweDAwIDB4MGUgMHgwMSAweDBlIDB4MDIgMHgwZSAweDAzIDB4MGYgMHgwMCAweDBmIDB4MDEg
-        MHgwZiAweDAyIDB4MGYgMHgwMz47CgljbG9ja25hbWVzID0gImZlXDBncDJcMGdwMVwwd29jcHAw
-        XDBzZ21paV90eDI1MG1cMHNnbWlpX3J4MjUwbVwwc2dtaWlfY2RyX3JlZlwwc2dtaWlfY2RyX2Zi
-        XDBzZ21paTJfdHgyNTBtXDBzZ21paTJfeHIyNTBtXDBzZ21paTJfY2RyX3JlZlwwc2dtaWkyX2Nk
-        cl9mYiI7Cglhc3NpZ25lZGNsb2NrcyA9IDwweDA4IDB4NjAgMHgwOCAweDYxPjsKCWFzc2lnbmVk
-        Y2xvY2twYXJlbnRzID0gPDB4MDggMHgxYiAweDA4IDB4MjI+OwoJbWVkaWF0ZWssZXRoc3lzID0g
-        PDB4MGQ+OwoJbWVkaWF0ZWssc2dtaWlzeXMgPSA8MHgwZSAweDBmPjsKCW1lZGlhdGVrLGluZnJh
-        Y2ZnID0gPDB4MTA+OwojcmVzZXRjZWxscyA9IDwweDAxPjsKI2FkZHJlc3NjZWxscyA9IDwweDAx
-        PjsKI3NpemVjZWxscyA9IDwweDAwPjsKCXN0YXR1cyA9ICJva2F5IjsKCm1hY0AwIHsKCWNvbXBh
-        dGlibGUgPSAibWVkaWF0ZWssZXRobWFjIjsKCXJlZyA9IDwweDAwPjsKCXBoeW1vZGUgPSAiMjUw
-        MGJhc2V4IjsKCXBoYW5kbGUgPSA8MHgxMz47CgpmaXhlZGxpbmsgewoJc3BlZWQgPSA8MHg5YzQ+
-        OwoJZnVsbGR1cGxleDsKCXBhdXNlOwp9Owp9OwoKbWFjQDEgewoJY29tcGF0aWJsZSA9ICJtZWRp
-        YXRlayxldGhtYWMiOwoJcmVnID0gPDB4MDE+OwoJcGh5bW9kZSA9ICJnbWlpIjsKCXBoeWhhbmRs
-        ZSA9IDwweDExPjsKfTsKCm1kaW9idXMgewojYWRkcmVzc2NlbGxzID0gPDB4MDE+Owojc2l6ZWNl
-        bGxzID0gPDB4MDA+OwoJcGhhbmRsZSA9IDwweDFlPjsKCmV0aGVybmV0cGh5QDAgewoJY29tcGF0
-        aWJsZSA9ICJldGhlcm5ldHBoeS1pZDAzYTIuOTQ2MSI7CglyZWcgPSA8MHgwMD47CglwaHltb2Rl
-        ID0gImdtaWkiOwoJbnZtZW1jZWxscyA9IDwweDEyPjsKCW52bWVtY2VsbG5hbWVzID0gInBoeWNh
-        bGRhdGEiOwoJcGhhbmRsZSA9IDwweDExPjsKfTsKCnN3aXRjaEAwIHsKCWNvbXBhdGlibGUgPSAi
-        bWVkaWF0ZWssbXQ3NTMxIjsKCXJlZyA9IDwweDFmPjsKCXJlc2V0Z3Bpb3MgPSA8MHgwYyAweDI3
-        IDB4MDA+OwoKcG9ydHMgewojYWRkcmVzc2NlbGxzID0gPDB4MDE+Owojc2l6ZWNlbGxzID0gPDB4
-        MDA+OwoKcG9ydEAwIHsKCXJlZyA9IDwweDAwPjsKCWxhYmVsID0gImxhbjEiOwp9OwoKcG9ydEAx
-        IHsKCXJlZyA9IDwweDAxPjsKCWxhYmVsID0gImxhbjIiOwp9OwoKcG9ydEAyIHsKCXJlZyA9IDw0
-        eDAyPjsKCWxhYmVsID0gImxhbjMiOwp9OwoKcG9ydEAzIHsKCXJlZyA9IDwweDAzPjsKCWxhYmVs
-        ID0gImxhbjQiOwp9OwoKcG9ydEA2IHsKCXJlZyA9IDwweDA2PjsKCWxhYmVsID0gImNwdSI7Cgll
-        dGhlcm5ldCA9IDwweDEzPjsKCXBoeW1vZGUgPSAiMjUwMGJhc2V4IjsKCmZpeGVkbGluayB7Cglz
-        cGVlZCA9IDwweDljND47CglmdWxsZHVwbGV4OwoJcGF1c2U7Cn07Cn07Cn07Cn07Cn07CgpobmF0
-        QDE1MDAwMDAwIHsKCWNvbXBhdGlibGUgPSAibWVkaWF0ZWssbXQtaG5hdF92NCI7CglyZWcgPSA8
-        MHgwMCAweDE1MTAwMDAwIDB4MDAgMHg4MDAwMD47CglyZXNldHMgPSA8MHgwZCAweDAwPjsKCXJl
-        c2V0bmFtZXMgPSAibXRrZXRoIjsKCXN0YXR1cyA9ICJva2F5IjsKCW10a2V0aGN3YW4gPSAiZXRo
-        MC42IjsKCW10a2V0aGNsYW4gPSAiZXRoMCI7CgltbWVkaWF0ZWstbWF4Z21hYyA9IDwweDAyPjsK
-        fTsKCnN5c2NvbkAxMDA2MDAwMCB7Cgljb21wYXRpYmxlID0gIm1lZGlhdGVrLG10Nzk4MS1zZ21p
-        aXN5c18wXHN5c2NvbiI7CglyZWcgPSA8MHgwMCAweDEwMDYwMDAwIDB4MDAgMHgxMDAwPjsKCXBu
-        X3N3YXA7CiNjbG9ja2NlbGxzID0gPDB4MDE+OwoJcGhhbmRsZSA9IDwweDBlPjsKfTsKCnN5c2Nv
-        bkAxMDA3MDAwMCB7Cgljb21wYXRpYmxlID0gIm1lZGlhdGVrLG10Nzk4MS1zZ21paXN5c18xXHN5
-        c2NvbiI7CglyZWcgPSA8MHgwMCAweDEwMDcwMDAwIDB4MDAgMHgxMDAwPjsKI2Nsb2NrY2VsbHMg
-        PSA8MHgwMT47CglwaGFuaGRsZSA9IDwweDBmPjsKfTsKCnRvcG1pc2NAMTFkMTAwMDAgeyAKCXNv
-        YyBtb2R1bGVzCgljb21wYXRpYmxlID0gIm1lZGlhdGVrLG10Nzk4MS10b3BtaXNjXHN5c2NvbiI7
-        CglyZWcgPSA8MHgwMCAweDExZDEwMDAwIDB4MDAgMHgxMDAwMD47CiNjbG9ja2NlbGxzID0gPDB4
-        MDE+OwoJcGhhbmRsZSA9IDwweDEwPjsKfTsKCnNuZmlAMTEwMDUwMDAgeyAKCWlubmVyIG5maSBj
-        b250cm9sbGVyCgljb21wYXRpYmxlID0gIm1lZGlhdGVrLG10Nzk4Ni1zbmFuZCI7CglyZWcgPSA8
-        MHgwMCAweDExMDA1MDAwIDB4MDAgMHgxMDAwIDB4MDAgMHgxMTAwNjAwMCAweDAwIDB4MTAwMD47
-        CglyZWdubmFtZXMgPSAibmZpXDBlY2MiOwoJaW50ZXJydXB0cyA9IDwweDAwIDB4NzkgMHgwND47
-        CgljbG9ja3MgPSA8MHgwMiAweDI0IDB4MDIgMHgyMyAweDAyIDB4MjU+OwoJY2xvY2tubmFtZXMg
-        PSJwYWRfY2xrXDBuZmlfY2xrXDBuZmlfaGNsayI7Cglhc3NpZ25lZGNsb2NrcyA9IDwweDA4IDB4
-        NGQgMHgwOCAweDRjPjsKCWFzc2lnbmVkY2xvY2twYXJlbnRzID0gPDB4MDggMHgwNiAweDA4IDB4
-        MDY+OwojYWRkcmVzc2NlbGxzID0gPDB4MDE+Owojc2l6ZWNlbGxzID0gPDB4MDA+OwoJc3RhdHVz
-        ID0gImRpc2FibGVkIjsKfTsKCm1tY0AxMTIzMDAwMCB7Cgljb21wYXRpYmxlID0gIm1lZGlhdGVr
-        LG10Nzk4Ni1tbWNcMG1lZGlhdGVrLG10Nzk4MS1tbWMiOwoJcmVnID0gPDB4MDAgMHgxMTIzMDAw
-        MCAweDAwIDB4MTAwMCAweDAwIDB4MTFjMjAwMDAgMHgwMCAweDEwMDA+OwoJaW50ZXJydXB0cyA9
-        IDwweDAwIDB4OGYgMHgwND47CgljbG9ja3MgPSA8MHgwOCAweDMzIDB4MDggMHgzNCAweDAyIDB4
-        MmI+OwoJYXNzaWduZWRjbG9ja3MgPSA8MHgwOCAweDU0IDB4MDggMHg1NT47Cglhc3NpZ25lZGNs
-        b2NrcGFyZW50cyA9IDwweDA4IDB4MDIgMHgwOCAweDFjPjsKCWNsb2NrbmFtZXMgPSJzb3VyY2Vc
-        MGhjbGtcMHNvdXJjZV9jZyI7CglzdGF0dXMgPSAiZGlzYWJsZWQiOwp9OwoKd2JzeXNAMTgwMDAw
-        MDAgewoJY29tcGF0aWJsZSA9ICJtZWRpYXRlayx3YnN5cyI7CglyZWcgPSA8MHgwMCAweDE4MDAw
-        MDAwIDB4MDAgMHgxMDAwMDAwPjsKCWludGVycnVwdHMgPSA8MHgwMCAweGQ1IDB4MDQgMHgwMCAw
-        eGQ2IDB4MDQgMHgwMCAweGQ3IDB4MDQgMHgwMCAweGQ4IDB4MDQ+OwoJY2hpcF9pZCA9IDwweDc5
-        ODE+Owp9OwoKd2VkX3BjaWVAEjAwMzAwMDAgeyAKCWlubmVyIGNvbnRyb2xsZXIgZm9yIFBDSSBl
-        bnVtZXJhdGlvbgogY29tcGF0aWJsZSA9ICJtZWRpYXRlayx3ZWQfcGNpZSI7CglyZWcgPSA8MHgw
-        MCAweDEwMDAzMDAwIDB4MDAgMHgxMD47Cn07CgpzcGlBMTEwMGEwMDAgeyAKCXNwaSBjb250cm9s
-        bGVyIHdpdGggc2VsZWN0IGFuZCBwYXJlbnQgY2xvY2sgc2VsZWN0aW9uCgljb21wYXRpYmxlID0g
-        Im1lZGlhdGVrLGlwbS1zcGktcXVhZCI7CglyZWcgPSA8MHgwMCAweDExMDBhMDAwIDB4MDAgMHgx
-        MDA+OwoJaW50ZXJydXB0cyA9IDwweDAwIDB4OGMgMHgwND47CgljbG9ja3MgPSA8MHgwOCAweDAy
-        IDB4MDggMHg0ZSAweDAyIDB4MjYgMHgyOCAweDI4PjsKCWNsb2NrbmFtZXMgPSJwYXJlbnRjbGtc
-        MHNlbGNsazBzcGljbGtcMHNwaWhjbGs0IjsKCXN0YXR1cyA9ICJva2F5IjsKCXBpbmN0cmxuYW1l
-        cyA9ICJkZWZhdWx0IjsKCXBpbmN0cmwtMCA9IDwweDE0PjsKCnNwaV9uYW5kQDAgewojYWRkcmVz
-        c2NlbGxzID0gPDB4MDE+Owojc2l6ZWNlbGxzID0gPDB4MDE+OwoJY29tcGF0aWJsZSA9ICJzcGkt
-        bmFuZCI7CglyZWcgPSA8MHgwMD47CglzcGlfbWF4X2ZyZXF1ZW5jeSA9IDwweDI2MjVhMDA+OwoJ
-        c3BpX3R4X2J1c3dpZHRoID0gPDB4MDQ+OwoJc3BpX3J4X2J1c3dpZHRoID0gPDB4MDQ+OwoJcGhh
-        bmRsZSA9IDwweDFkPjsKfTsKfTsKCnNwaUAxMTAwYjAwMCB7Cgljb21wYXRpYmxlID0gIm1lZGlh
-        dGVrLGlwbS1zcGktc2luZ2xlIjsKCXJlZyA9IDwweDAwIDB4MTEwMGIwMDAgMHgwMCAweDEwMD47
-        CglpbnRlcnJ1cHRzID0gPDB4MDAgMHg4ZCAweDA0PjsKCWNsb2NrcyA9IDwweDA4IDB4MDIgMHgw
-        OCAweDRmIDB4MDIgMHgyNyAweDAyIDB4Mjk+OwoJY2xvY2tubmFtZXMgPSJwYXJlbnRjbGtcMHNl
-        bGNsazBzcGljbGtcMHNwaWhjbGs0IjsKCXN0YXR1cyA9ICJkaXNhYmxlZCI7CglwaW5jdHJsbmFt
-        ZXMgPSAiZGVmYXVsdCI7CglwaW5jdHJsLTAgPSA8MHgxNT47Cn07CgpzcGlAMTEwMDkwMDAgeyAK
-        CXNwaSBjb250cm9sbGVyIHdpdGggc2VsZWN0IGFuZCBwYXJlbnQgY2xvY2sgc2VsZWN0aW9uCglj
-        b21wYXRpYmxlID0gIm1lZGlhdGVrLGlwbS1zcGktcXVhZCI7CglyZWcgPSA8MHgwMCAweDExMDA5
-        MDAwIDB4MDAgMHgxMDA+OwoJaW50ZXJydXB0cyA9IDwweDAwIDB4OGUgMHgwND47CgljbG9ja3Mg
-        PSA8MHgwOCAweDAyIDB4MDggMHg0ZSAweDAyIDB4MjEgMHgyMiAweDIyPjsKCWNsb2NrbmFtZXMg
-        PSJwYXJlbnRjbGtcMHNlbGNsazBzcGljbGtcMHNwaWhjbGs0IjsKCXN0YXR1cyA9ICJkaXNhYmxl
-        ZCI7Cn07Cgpjb25zeXNAMTAwMDAwMDAgeyAKCWlubmVyIGNvbnNvbGUgY29udHJvbGxlciBmb3Ig
-        Y29uc29sZSBvdXRwdXQKCWNvbXBhdGlibGUgPSAibWVkaWF0ZWssbXQ3OTgxLWNvbnN5cyI7Cgly
-        ZWcgPSA8MHgwMCAweDEwMDAwMDAwIDB4MDAgMHg4NjAwMDAwPjsKCW1lbW9yeXJlZ2lvbiA9IDw0
-        eDE2PjsKfTsKCnhoY2lAMTEyMDAwMDAgeyAKCXVzYiBob3N0IGNvbnRyb2xsZXIKIGNvbXBhdGli
-        bGUgPSAibWVkaWF0ZWssbXQ3OTg2LXhoY2lcMG1lZGlhdGVrLG10ay14aGNpIjsKCXJlZyA9IDw0
-        eDAwIDB4MTEyMDAwMDAgMHgwMCAweDI4MDAwIDB4MDAgMHgxMTIwM2UwMCAweDAwIDB4MTAwPjsK
-        CnJlZ25hbWVzID0gIm1hY1wvaXBwYyI7CglpbnRlcnJ1cHRzID0gPDB4MDAgMHhhZCAweDA0PjsK
-        CnBoeXMgPSA8MHgxNyAweDAzIDB4MGEgMHgwND47CgljbG9ja3MgPSA8MHgxOCAweDE4IDB4MTgg
-        MHgxOCAweDE4PjsKCWNsb2NrbmFtZXMgPSJzeXNfY2tcMHhoY2lfY2tcMHJlZl9ja1wwbWN1X2Nr
-        XDBkbWFfY2siOwojYWRkcmVzc2NlbGxzID0gPDB4MDI+Owojc2l6ZWNlbGxzID0gPDB4MDI+OwoJ
-        bWVkaWF0ZWstdTNwZGlzbWFzayA9IDwweDAwPjsKCXN0YXR1cyA9ICJva2F5IjsKfTsKCnVzYnBo
-        eUAxMWUxMDAwMCB7Cgljb21wYXRpYmxlID0gIm1lZGlhdGVrLG10Nzk4NlwwbWVkaWF0ZWssZ2Vu
-        ZXJpYy10cGh5LXYyIjsKI2FkZHJlc3NjZWxscyA9IDwweDAyPjsKI3NpemVjZWxscyA9IDwweDAy
-        PjsKCXJhbmdlczsKCXN0YXR1cyA9ICJva2F5IjsKCnVzYnBoeUAxMWUxMDAwMCB7CglyZWcgPSA8
-        MHgwMCAweDExZTEwMDAwIDB4MDAgMHg3MDA+OwoJY2xvY2tzID0gPDB4MTg+OwoJY2xvY2tubmFt
-        ZXMgPSAicmVmIjsKI3BoeWNlbGxzID0gPDB4MDE+OwoJc3RhdHVzID0gIm9rYXkiOwoJcGhhbmRs
-        ZSA9IDwweDE3PjsKfTsKCnVzYnBoeUAxMWUxMDcwMCB7CglyZWcgPSA8MHgwMCAweDExZTEwNzAw
-        IDB4MDAgMHg5MDA+OwoJY2xvY2tzID0gPDB4MTg+OwoJY2xvY2tubmFtZXMgPSAicmVmIjsKI3Bo
-        eWNlbGxzID0gPDB4MDE+OwoJbWVkaWF0ZWssc3lzY29udHlwZSA9IDwweDEwIDB4MjE4IDB4MDA+
-        OwoJbnZtZW1jZWxscyA9IDwweDE5IDB4MWEgMHgxYj47Cgludm1lbWNlbGxuYW1lcyA9ICJpbnRy
-        XDByeF9pbXBcXHR4X2ltcCI7CglzdGF0dXMgPSAib2theSI7CglwaGFuaGRsZSA9IDwweDBhPjsK
-        fTsKfTsKCnJlZ3VsYXRvcjNwM3YgewoJY29tcGF0aWJsZSA9ICJyZWd1bGF0b3ItZml4ZWQiOwoJ
-        cmVndWxhdG9ybmFtZSA9ICJmaXhlZC0zLjNWIjsKCXJlZ3VsYXRvcm1pbm1pY3Jvdm9sdCA9IDw0
-        eDMyNWFhMD47CglyZWd1bGF0b3JtYXhtaWNyb3ZvbHQgPSA8MHgzMjVhYTA+OwoJcmVndWxhdG9y
-        Ym9vdG9uOwoJcmVndWxhdG9yYWx3YXlzb247Cn07CgpjbGtpdGcgewoJY29tcGF0aWJsZSA9ICJz
-        aW1wbGUtYnVzIjsKCmJyaW5ndXAgeyAKCWNvbXBhdGlibGUgPSAibWVkaWF0ZWssY2xrLWJyaW5n
-        LXVwIjsKCWNsb2NrcyA9IDwweDA1IDB4MDAgMHgwNSAweDAxIDB4MDUgMHgyIDIweDA1IDB4MDMg
-        MHgwNSAweDA0IDB4MDUgMHgwNSAweDA1IDB4MDYgMHgwNSAweDA3IDB4MDkgMHgwMCAweDFjIDB4
-        MDkgMHgyIDIweDA5IDB4MDMgMHgwOSAweDA0IDB4MWMgMHgwOSAweDA2IDB4MDkgMHgwNyAweDFj
-        IDB4MWMgMHgxYyAweDFjIDB4MDkgMHgwYyAweDA5IDB4MGQgMHgwOSAweDBlIDB4MDkgMHgwZiAw
-        eDA5IDB4MTAgMHgwOSAweDExIDB4MWMgMHgxYyAweDFjIDB4MWMgMHgxYyAweDA5IDB4MTcgMHgw
-        OSAweDE4IDB4MDkgMHgxYSAweDA5IDB4MWIgMHgwOSAweDFjIDB4MDkgMHgxZCAweDA5IDB4MWUg
-        MHgwOSAweDFmIDB4MDkgMHgyMCAweDA5IDB4MjEgMHgxYyAweDA5IDB4MjMgMHgxYyAweDFjIDB4
-        MWMgMHgxYyAweDFjIDB4MWMgMHgxYyAweDFjIDB4MWMgMHgwMiAweDBiIDB4MWMgMHgxYyAweDFj
-        IDB4MWMgMHgwMiAweDExIDB4MWMgMHgxYyAweDFjIDB4MWMgMHgxYyAweDAyIDB4MTcgMHgxYyAw
-        eDAyIDB4MTkgMHgwMiAweDFhIDB4MDIgMHgxYiAweDFjIDB4MWMgMHgxYyAweDFjIDB4MWMgMHgx
-        YyAweDFjIDB4MWMgMHgxYyAweDFjIDB4MWMgMHgxYyAweDFjIDB4MWMgMHgwMiAweDJhIDB4MDIg
-        MHgyYiAweDAyIDB4MmMgMHgwMiAweDJkIDB4MDIgMHgyZSAweDFjIDB4MWMgMHgwMiAweDMxIDB4
-        MDIgMHgzMiAweDAyIDB4MzMgMHgwMiAweDM0IDB4MDIgMHgzNSAweDAyIDB4MzYgMHgwMiAweDM3
-        IDB4MWMgMHgxYyAweDFjIDB4MDggMHgwMSAweDFjIDB4MDggMHgwNSAweDA4IDB4MDYgMHgwOCAw
-        eDA3IDB4MDggMHgwNCAweDA4IDB4MDkgMHgwOCAweDBjIDB4MDggMHgwZiAweDA4IDB4MTAgMHgw
-        OCAweDEyIDB4MDggMHgxNCAweDA4IDB4MTUgMHgwOCAweDE2IDB4MDggMHgxNyAweDA4IDB4MTkg
-        MHgwOCAweDFhIDB4MWMgMHgwOCAweDFkIDB4MDggMHgxZSAweDA4IDB4MjEgMHgxYyAweDA4IDB4
-        MjQgMHgwOCAweDI1IDB4MWMgMHgwOCAweDI5IDB4MDggMHgyNiAweDA4IDB4MmIgMHgwOCAweDJh
-        IDB4MWMgMHgwOCAweDMxIDB4MWMgMHgxYyAweDFjIDB4MDggMHg1NiAweDA4IDB4MzcgMHgwOCAw
-        eDNkIDB4MDggMHgzZSAweDA4IDB4M2YgMHgwOCAweDQ1IDB4MDggMHg0MSAweDA4IDB4NDYgMHgw
-        OCAweDQ3IDB4MDggMHg0OCAweDA4IDB4NDkgMHgwOCAweDRhIDB4MDggMHgzYSAweDFjIDB4MWMg
-        MHgxYyAweDFjIDB4MDggMHg1MiAweDFjIDB4MWMgMHgxYyAweDA4IDB4NTYgMHgwOCAweDU3IDB4
-        MDggMHg1OCAweDA4IDB4NTkgMHgwOCAweDVhIDB4MDggMHg1YiAweDA4IDB4NWMgMHgwOCAweDVk
-        IDB4MDggMHg1ZSAweDA4IDB4NWYgMHgxYyAweDFjIDB4MDggMHg2MiAweDA4IDB4NWUgMHgxYyAw
-        eDA4IDB4NjQgMHgwOCAweDU2IDB4MDggMHg2OSAweDA4IDB4NmEgMHgwOCAweDZiIDB4MDggMHg2
-        Yz47CgljbG9ja25hbWVzID0gIjBcMDFcMDJcMDNcMDRcMDVcMDZcMDdcMDhcMDlcMDEwXDAxMVww
-        MTJcMDEzXDAxNFwwMTVcMDE2XDAxN1wwMThcMDE5XDAyMFwwMjFcMDIyXDAyM1wwMjRcMDI1XDAy
-        NlwwMjdcMDI4XDAyOVwwMzBcMDMxXDAzMlwwMzNcMDM0XDAzNVwwMzZcMDM3XDAzOFwwMzlcMDQw
-        XDA0MVwwNDJcMDQzXDA0NFwwNDVcMDQ2XDA0N1wwNDhcMDQ5XDA1MFwwNTFcMDUyXDA1M1wwNTRc
-        MDU1XDA1NlwwNTdcMDU4XDA1OVwwNjBcMDYxXDA2MlwwNjNcMDY0XDA2NVwwNjZcMDY3XDA2OFww
-        NjlcMDcwXDA3MVwwNzJcMDczXDA3NFwwNzVcMDc2XDA3N1wwNzhcMDc5XDA4MFwwODFcMDgyXDA4
-        M1wwODRcMDg1XDA4NlwwODdcMDg4XDA4OVwwOTBcMDkxXDA5MlwwOTNcMDk0XDA5NVwwOTZcMDk3
-        XDA5OFwwOTlcMDEwMFwwMTAxXDAxMDJcMDEwM1wwMTA0XDAxMDVcMDEwNlwwMTA3XDAxMDhcMDEw
-        OVwwMTEwXDAxMTFcMDExMlwwMTEzXDAxMTRcMDExNVwwMTE2XDAxMTdcMDExOFwwMTE5XDAxMjBc
-        MDEyMVwwMTIyXDAxMjNcMDEyNFwwMTI1XDAxMjZcMDEyN1wwMTI4XDAxMjl<KEY>
-        EOF
-        echo "✅ 成功生成: dts/mt7981b-wma301-ax3000-v2.dts"
-
-    - name: 📥 克隆 ImmortalWrt 源码
-      run: |
-        git clone -b openwrt-23.05 --depth 1 https://github.com/immortalwrt/immortalwrt source
+        mkdir -p $GITHUB_WORKSPACE/openwrt
+        cd $GITHUB_WORKSPACE/openwrt
+        git clone --depth 1 -b ${{ env.BRANCH }} ${{ env.REPO_URL }} source
         cd source
+
+    - name: Copy User DTS to Target Directory
+      run: |
+        DTS_DST="target/linux/mediatek/files-5.15/arch/arm64/boot/dts/mediatek"
+        mkdir -p $GITHUB_WORKSPACE/openwrt/source/$DTS_DST
+        cp ${{ steps.find_dts.outputs.device_dts_path }} \
+           $GITHUB_WORKSPACE/openwrt/source/$DTS_DST/${{ steps.find_dts.outputs.device_name }}.dts
+        echo "✅ Copied DTS to source tree"
+
+    - name: Check if Device Already Supported
+      id: check_device
+      run: |
+        SOURCE_DIR=$GITHUB_WORKSPACE/openwrt/source
+        DEVICE_NAME=${{ steps.find_dts.outputs.device_name }}
+        MK_FILE="$SOURCE_DIR/target/linux/mediatek/image/mt798x.mk"
+
+        if grep -q "define Device/$DEVICE_NAME" "$MK_FILE"; then
+          echo "🔍 Device '$DEVICE_NAME' is already supported."
+          echo "already_supported=true" >> $GITHUB_OUTPUT
+        else
+          echo "🆕 Device '$DEVICE_NAME' is NOT supported. Will register it."
+          echo "already_supported=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Register New Device (if not exists)
+      if: steps.check_device.outputs.already_supported == 'false'
+      run: |
+        SOURCE_DIR=$GITHUB_WORKSPACE/openwrt/source
+        DEVICE_NAME=${{ steps.find_dts.outputs.device_name }}
+        MK_FILE="$SOURCE_DIR/target/linux/mediatek/image/mt798x.mk"
+
+        cat >> "$MK_FILE" << EOF
+
+# Auto-registered by GitHub Actions for $DEVICE_NAME
+define Device/$DEVICE_NAME
+  DEVICE_VENDOR := Custom
+  DEVICE_MODEL := $DEVICE_NAME
+  DEVICE_DTS := $DEVICE_NAME
+  DEVICE_PACKAGES := \
+    kmod-usb-core kmod-usb-ohci kmod-usb2 kmod-usb-ledtrig-usbport \
+    block-mount e2fsprogs fdisk usbutils lsblk printenv \
+    p910nd samba4-server samba4-client \
+    kmod-fs-ntfs ntfs-3g mount.ntfs \
+    luci luci-ssl luci-i18n-base-zh-cn \
+    odhcp6c odhcpd-ipv6only \
+    wpad-basic-wolfssl hostapd-common \
+    kmod-ipt-nat6
+  KERNEL_SIZE := ${{ env.KERNEL_SIZE }}
+  IMAGE_SIZE := ${{ env.IMAGE_SIZE }}
+  IMAGES += factory.bin sysupgrade.bin
+  IMAGE/factory.bin := \$$(sysupgrade_bin) | check-size \$$\$\$(IMAGE_SIZE)
+  IMAGE/sysupgrade.bin := \$$(sysupgrade_bin) | check-size \$$\$\$(IMAGE_SIZE)
+endef
+TARGET_DEVICES += $DEVICE_NAME
+EOF
+        echo "✅ Successfully registered new device: $DEVICE_NAME"
+
+    - name: Write .config with Target Configuration
+      run: |
+        cd $GITHUB_WORKSPACE/openwrt/source
+        cat > .config << EOF
+CONFIG_TARGET_${{ env.TARGET }}=y
+CONFIG_TARGET_${{ env.SUBTARGET }}=y
+CONFIG_TARGET_${{ env.SUBTARGET }}_DEVICE_${{ steps.find_dts.outputs.device_name }}=y
+
+# General Options
+CONFIG_DEVEL=y
+CONFIG_BUILD_LOG=y
+CONFIG_CCACHE=y
+
+# LuCI Web Interface
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-ssl=y
+CONFIG_PACKAGE_luci-theme-bootstrap=y
+CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+
+# USB Support
+CONFIG_PACKAGE_kmod-usb-core=y
+CONFIG_PACKAGE_kmod-usb-ohci=y
+CONFIG_PACKAGE_kmod-usb2=y
+CONFIG_PACKAGE_kmod-usb-ledtrig-usbport=y
+CONFIG_PACKAGE_usbutils=y
+CONFIG_PACKAGE_lsusb=y
+
+# USB Printer
+CONFIG_PACKAGE_kmod-usb-printer=y
+CONFIG_PACKAGE_p910nd=y
+
+# Storage & Filesystem
+CONFIG_PACKAGE_block-mount=y
+CONFIG_PACKAGE_e2fsprogs=y
+CONFIG_PACKAGE_fdisk=y
+CONFIG_PACKAGE_kmod-fs-ext4=y
+CONFIG_PACKAGE_kmod-fs-ntfs=y
+CONFIG_PACKAGE_ntfs-3g=y
+CONFIG_PACKAGE_mount.ntfs=y
+
+# Samba4 File Sharing
+CONFIG_PACKAGE_samba4-server=y
+CONFIG_PACKAGE_samba4-client=y
+
+# IPv6 Support
+CONFIG_PACKAGE_odhcp6c=y
+CONFIG_PACKAGE_odhcpd-ipv6only=y
+CONFIG_PACKAGE_kmod-ipt-nat6=y
+CONFIG_PACKAGE_kmod-ip6tables=y
+
+# Wireless
+CONFIG_PACKAGE_hostapd-common=y
+CONFIG_PACKAGE_wpad-basic-wolfssl=y
+CONFIG_PACKAGE_iwinfo=y
+
+# Network Tools
+CONFIG_PACKAGE_curl=y
+CONFIG_PACKAGE_iperf3=y
+CONFIG_PACKAGE_ping6=y
+
+# Debug
+CONFIG_PACKAGE_netstat=y
+CONFIG_PACKAGE_tcpdump=y
+EOF
+        echo "✅ .config generated for device: ${{ steps.find_dts.outputs.device_name }}"
+
+    - name: Update Feeds
+      working-directory: $GITHUB_WORKSPACE/openwrt/source
+      run: |
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 📁 复制 DTS 到目标架构目录
+    - name: Start Compilation
+      working-directory: $GITHUB_WORKSPACE/openwrt/source
       run: |
-        cd source
-        DST_DIR="target/linux/${{ env.TARGET }}/${{ env.SUBTARGET }}/dts"
-        mkdir -p "$DST_DIR"
-        cp "../dts/${{ env.DTS_FILE }}" "$DST_DIR/"
-        echo "✅ DTS 文件已就位: $DST_DIR/${{ env.DTS_FILE }}"
-
-    - name: 🔧 注册新设备（含 Tab 缩进）
-      run: |
-        DIR="source/target/linux/mediatek/filogic/image"
-        MAKEFILE="$DIR/Makefile"
-        mkdir -p "$DIR"
-
-        if [ ! -f "$MAKEFILE" ]; then
-          echo 'include $(INCLUDE_DIR)/image.mk' > "$MAKEFILE"
-        fi
-
-        if ! grep -q "Device/WMA301_AX3000" "$MAKEFILE"; then
-          cat >> "$MAKEFILE" << EOF
-define Device/WMA301_AX3000
-\$(Device/uimage-lzma-loader)
-  DEVICE_VENDOR := Wma301
-  DEVICE_MODEL := mt7981b-wma301-ax3000-v2
-  DEVICE_DTS := mt7981b-wma301-ax3000-v2
-  DEVICE_PACKAGES := wpad-basic-mbedtls kmod-leds-gpio kmod-input-gpio-buttons kmod-mt7915 kmod-mt7531ae luci relayd odhcpd-ipv6only samba36-server kmod-usb-printer kmod-of-mediatek-pinctrl
-  SUPPORTED_DEVICES += mt7981b-wma301-ax3000-v2
-endef
-TARGET_DEVICES += WMA301_AX3000
-EOF
-          echo "✅ 成功注册设备: WMA301_AX3000"
-        else
-          echo "ℹ️ 设备已存在，跳过注册"
-        fi
-
-    - name: 🎛️ 生成配置文件 .config
-      run: |
-        cd source
-        > .config
-        echo "CONFIG_TARGET_mediatek=y" >> .config
-        echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
-        echo "CONFIG_TARGET_mediatek_filogic_DEVICE_WMA301_AX3000=y" >> .config
-        echo "CONFIG_PACKAGE_u-boot-mediatek=y" >> .config
-        echo "CONFIG_PACKAGE_u-boot-mediatek-images=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-leds-gpio=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-input-gpio-buttons=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-of-mediatek-pinctrl=y" >> .config
-        echo "CONFIG_PACKAGE_luci=y" >> .config
-        echo "CONFIG_PACKAGE_relayd=y" >> .config
-        echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
-        echo "CONFIG_PACKAGE_samba36-server=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-printer=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-mt7915=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-mt7531ae=y" >> .config
         make defconfig
-        echo "📄 当前 .config 内容:"
-        grep -E "CONFIG_TARGET|CONFIG_PACKAGE" .config | head -20
+        echo "🚀 Starting firmware compilation..."
+        make -j$(nproc) V=s || { echo "❌ Build failed!"; exit 1; }
 
-    - name: 🏗️ 开始编译固件
+    - name: Find Firmware Output
+      id: find_firmware
       run: |
-        cd source
-        echo "⏳ 正在编译... 使用 3 个线程以避免内存溢出"
-        make -j3 V=s
-
-    - name: 🔍 检查是否生成固件
-      if: success()
-      run: |
-        cd source
-        FOUND=false
-        for f in bin/targets/*/*/openwrt-*-*-squashfs-sysupgrade.bin; do
-          if [ -f "$f" ]; then
-            sz=$(stat -c%s "$f")
-            du -h "$f"
-            echo "🎉 成功生成固件: $(basename "$f") ($sz 字节)"
-            FOUND=true
-            if [ $sz -gt 134217728 ]; then
-              echo "❌ 错误：固件超过 128MB 限制"
-              exit 1
-            fi
-          fi
-        done
-        if [ "$FOUND" = false ]; then
-          echo "❌ 错误：未生成任何固件！请检查日志中是否有 'Image generation failed'"
-          ls -la bin/targets/ || echo "bin/targets/ 不存在"
+        BUILD_DIR=$GITHUB_WORKSPACE/openwrt/source/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}
+        FIRMWARE_FILES=$(find "$BUILD_DIR" -name "*${{ steps.find_dts.outputs.device_name }}*.bin" -type f 2>/dev/null || true)
+        if [ -z "$FIRMWARE_FILES" ]; then
+          echo "❌ No firmware file generated!"
+          ls -la "$BUILD_DIR" || true
           exit 1
         fi
+        echo "firmware_dir=$(dirname $FIRMWARE_FILES)" >> $GITHUB_OUTPUT
+        echo "📄 Firmware built successfully:"
+        echo "$FIRMWARE_FILES" | xargs ls -lh
 
-    - name: 📦 上传编译好的固件
-      if: success()
-      uses: actions/upload-artifact@v4
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v3
       with:
-        name: firmware-WMA301_AX3000-${{ env.BUILD_TIME }}
-        path: source/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/**
-        retention-days: 90
+        path: ${{ steps.find_firmware.outputs.firmware_dir }}/*.bin
+        if-no-files-found: error
+        retention-days: 7
+
+    - name: Create GitHub Release
+      if: github.ref == 'refs/heads/main'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        TAG="v$(date +%Y%m%d)-${{ steps.find_dts.outputs.device_name }}"
+        RELEASE_NAME="📦 ImmortalWrt Auto-Build for ${{ steps.find_dts.outputs.device_name }}"
+        BODY="自动编译固件，支持以下功能：
+- 🌐 LuCI 中文图形界面
+- 🖨️ USB 打印机共享 (p910nd)
+- 📁 Samba4 文件共享服务
+- 🔗 无线中继模式（Client + AP）
+- 🌍 IPv6 前缀委派（PD）支持
+- 💾 SPI NAND 分区管理
+- ⚙️ NTFS/exFAT/U盘自动挂载
+
+编译时间：$(date '+%Y-%m-%d %H:%M')
+源码分支：${{ env.BRANCH }}
+设备型号：${{ steps.find_dts.outputs.device_name }}
+
+💡 使用方法：
+1. 通过 U-Boot 或现有 OpenWrt 刷入 \`sysupgrade.bin\`
+2. 登录 http://192.168.1.1 配置网络与服务"
+
+        gh release create "$TAG" \
+          --title "$RELEASE_NAME" \
+          --notes "$BODY" \
+          --draft=false \
+          --delete-tag \
+          ${{ steps.find_firmware.outputs.firmware_dir }}/*.bin || echo "⚠️ Failed to create release (maybe already exists)"
